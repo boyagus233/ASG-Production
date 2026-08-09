@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Expo & Build Artifacts
+.expo/
+**/.expo/
+dist/
+web-build/
+*.apk
+
+# Android build outputs
+android/build/
+android/app/build/
+android/.gradle/
+android/.idea/
+
+# Environment files
+.env
+.env.local
+*.env
+
+# Uploads
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# System & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
