@@ -34,17 +34,39 @@ export default function ChatsScreen() {
 
   useEffect(() => {
     loadUserAndData();
+  }, []);
 
-    // ⚡ REAL-TIME SOCKET LISTENERS FOR GROUPS & INVITATIONS
+  useEffect(() => {
+    if (!user?.id) return;
+
+    // ⚡ JOIN PERSONAL USER ROOM UNTUK NOTIFIKASI REAL-TIME
+    socket.emit('join_user', user.id);
+
+    // ⚡ LISTEN NOTIFIKASI JOB BARU KHUSUS UNTUK HP MEMBER (REAL-TIME)
+    socket.on('new_job_invitation', (notif: { title: string; body: string }) => {
+      showToast(`${notif.title}\n${notif.body}`, 'info');
+
+      // Tampilkan Notifikasi Bilah Sistem HP / Browser
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
+        if (Notification.permission === 'granted') {
+          new Notification(notif.title, {
+            body: notif.body,
+            icon: '/favicon.png'
+          });
+        }
+      }
+      fetchPendingInvitations(user.id);
+    });
+
     socket.on('update_groups', () => {
-      if (user?.id) fetchGroups(user.id);
+      fetchGroups(user.id);
     });
 
     socket.on('update_invitations', () => {
-      if (user?.id) fetchPendingInvitations(user.id);
+      fetchPendingInvitations(user.id);
     });
 
-    // Minta izin notifikasi browser jika tersedia
+    // Minta izin notifikasi browser jika belum disetujui
     if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
       if (Notification.permission === 'default') {
         Notification.requestPermission();
@@ -52,6 +74,7 @@ export default function ChatsScreen() {
     }
 
     return () => {
+      socket.off('new_job_invitation');
       socket.off('update_groups');
       socket.off('update_invitations');
     };
@@ -92,14 +115,6 @@ export default function ChatsScreen() {
       const res = await fetch(`${API_BASE_URL}/api/groups/invitations/pending?userId=${userId}`);
       const data = await res.json();
       setInvitations(data);
-
-      if (data.length > 0 && Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
-        if (Notification.permission === 'granted') {
-          new Notification('Tawaran Job Baru! 💼', {
-            body: `Anda mendapatkan ${data.length} tawaran job baru. Buka aplikasi untuk menerima/menolak.`,
-          });
-        }
-      }
     } catch (error) {
       // silent
     }

@@ -14,7 +14,7 @@ const logAudit = async (action, userId, details) => {
   }
 };
 
-// Helper untuk Membuat Notifikasi Internal + Real-time Socket
+// Helper untuk Membuat Notifikasi Internal + Real-time Push ke Socket User
 const createNotification = async (req, userId, title, body) => {
   try {
     await db.query(
@@ -22,6 +22,7 @@ const createNotification = async (req, userId, title, body) => {
       [userId, title, body]
     );
     if (req.io) {
+      req.io.to(`user_${userId}`).emit('new_job_invitation', { title, body });
       req.io.emit('update_notifications');
     }
   } catch (err) {
@@ -51,6 +52,7 @@ router.post('/', async (req, res) => {
             [newGroup.id, memberId, 'PENDING']
           );
 
+          // Kirim Notifikasi Real-Time ke HP Member
           await createNotification(
             req,
             memberId,
