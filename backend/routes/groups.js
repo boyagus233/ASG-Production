@@ -14,13 +14,16 @@ const logAudit = async (action, userId, details) => {
   }
 };
 
-// Helper untuk Membuat Notifikasi Internal
-const createNotification = async (userId, title, body) => {
+// Helper untuk Membuat Notifikasi Internal + Real-time Socket
+const createNotification = async (req, userId, title, body) => {
   try {
     await db.query(
       'INSERT INTO notifications (user_id, title, body) VALUES ($1, $2, $3)',
       [userId, title, body]
     );
+    if (req.io) {
+      req.io.emit('update_notifications');
+    }
   } catch (err) {
     console.error('Create Notification Error:', err);
   }
@@ -32,7 +35,6 @@ router.post('/', async (req, res) => {
   if (!name || !owner_id) return res.status(400).json({ error: 'Nama grup dan owner_id wajib diisi!' });
 
   try {
-    // Buat Grup Baru
     const insertGroup = 'INSERT INTO groups (name, owner_id) VALUES ($1, $2) RETURNING *';
     const groupResult = await db.query(insertGroup, [name, owner_id]);
     const newGroup = groupResult.rows[0];
@@ -44,14 +46,13 @@ router.post('/', async (req, res) => {
     if (member_ids && Array.isArray(member_ids)) {
       for (const memberId of member_ids) {
         if (memberId !== owner_id) {
-          // Buat record undangan PENDING
           await db.query(
             'INSERT INTO job_invitations (group_id, user_id, status) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
             [newGroup.id, memberId, 'PENDING']
           );
 
-          // Kirim notifikasi ke HP member
           await createNotification(
+            req,
             memberId,
             'Job Baru Ditawarkan! 💼',
             `Anda mendapatkan tawaran Job: "${name}". Masuk untuk accept atau reject.`
@@ -62,6 +63,13 @@ router.post('/', async (req, res) => {
 
     // Catat Audit Log
     await logAudit('CREATE_GROUP', owner_id, `Membuat grup baru: ${name} (ID: ${newGroup.id}) dengan ${member_ids ? member_ids.length : 0} undangan`);
+
+    // BROADCAST REAL-TIME VIA SOCKET.IO
+    if (req.io) {
+      req.io.emit('update_groups');
+      req.io.emit('update_invitations');
+      req.io.emit('update_dashboard');
+    }
 
     res.status(201).json({ message: 'Grup & Undangan Job berhasil dibuat!', group: newGroup });
   } catch (error) {
@@ -92,13 +100,12 @@ router.get('/', async (req, res) => {
   }
 });
 
-// 3. Hapus Grup (Hanya Owner) + Masukkan ke History Job Selesai
+// 3. Hapus Grup (Hanya Owner) + Masukkan ke History Job Selesai (REAL-TIME)
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
   const { userId } = req.query;
 
   try {
-    // Cek owner & data grup
     const check = await db.query(`
       SELECT g.*, 
         (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
@@ -118,11 +125,17 @@ router.delete('/:id', async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
     `, [targetGroup.id, targetGroup.name, targetGroup.owner_id, targetGroup.member_count, targetGroup.created_at]);
 
-    // Hapus grup (Cascade akan menghapus messages & members & invitations)
+    // Hapus grup
     await db.query('DELETE FROM groups WHERE id = $1', [id]);
 
-    // Audit Log
     await logAudit('DELETE_GROUP', userId, `Menghapus & Mengarsipkan job/grup: ${targetGroup.name} (ID: ${id})`);
+
+    // BROADCAST REAL-TIME VIA SOCKET.IO TO ALL CLIENTS AND DASHBOARD
+    if (req.io) {
+      req.io.emit('update_groups');
+      req.io.emit('update_dashboard');
+      req.io.to(`group_${id}`).emit('group_deleted', { groupId: id });
+    }
 
     res.json({ message: 'Grup berhasil diselesaikan dan diarsipkan ke Riwayat Job!' });
   } catch (error) {
@@ -175,15 +188,14 @@ router.get('/invitations/pending', async (req, res) => {
   }
 });
 
-// 6. Respon Member terhadap Undangan Job (ACCEPT / REJECT)
+// 6. Respon Member terhadap Undangan Job (ACCEPT / REJECT) - REAL-TIME
 router.post('/invitations/:invitationId/respond', async (req, res) => {
   const { invitationId } = req.params;
-  const { action, userId } = req.body; // action: 'ACCEPT' | 'REJECT'
+  const { action, userId } = req.body;
 
   if (!action || !userId) return res.status(400).json({ error: 'action dan userId diperlukan!' });
 
   try {
-    // Ambil data undangan
     const invRes = await db.query(`
       SELECT ji.*, g.name as group_name, g.owner_id
       FROM job_invitations ji
@@ -194,47 +206,49 @@ router.post('/invitations/:invitationId/respond', async (req, res) => {
     if (invRes.rows.length === 0) return res.status(404).json({ error: 'Undangan tidak ditemukan!' });
     const invitation = invRes.rows[0];
 
-    // Ambil nama lengkap member
     const userRes = await db.query('SELECT nama_lengkap, username FROM users WHERE id = $1', [userId]);
     const userName = userRes.rows[0]?.nama_lengkap || userRes.rows[0]?.username || 'Anggota';
 
     if (action === 'ACCEPT') {
-      // Ubah status ke ACCEPTED
       await db.query('UPDATE job_invitations SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', ['ACCEPTED', invitationId]);
-      
-      // Tambahkan ke group_members
-      await db.query(
-        'INSERT INTO group_members (group_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-        [invitation.group_id, userId]
-      );
+      await db.query('INSERT INTO group_members (group_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [invitation.group_id, userId]);
 
-      // Cek apakah semua member undangan sudah merespon ACCEPTED
       const pendingCheck = await db.query(
         "SELECT COUNT(*) FROM job_invitations WHERE group_id = $1 AND status = 'PENDING'",
         [invitation.group_id]
       );
       
       if (parseInt(pendingCheck.rows[0].count) === 0) {
-        // Notifikasi Admin bahwa semua member sudah menerima!
         await createNotification(
+          req,
           invitation.owner_id,
           'Semua Member Sudah Masuk! 🎉',
           `Seluruh anggota yang diundang telah menyetujui job "${invitation.group_name}".`
         );
       }
 
+      if (req.io) {
+        req.io.emit('update_groups');
+        req.io.emit('update_invitations');
+        req.io.emit('update_dashboard');
+      }
+
       res.json({ message: 'Anda berhasil menerima job ini!', status: 'ACCEPTED' });
 
     } else if (action === 'REJECT') {
-      // Ubah status ke REJECTED
       await db.query('UPDATE job_invitations SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', ['REJECTED', invitationId]);
 
-      // Kirim Notifikasi ke Admin bahwa member menolak job
       await createNotification(
+        req,
         invitation.owner_id,
         'Anggota Menolak Job! ⚠️',
         `"${userName}" tidak bisa mengikuti job "${invitation.group_name}".`
       );
+
+      if (req.io) {
+        req.io.emit('update_invitations');
+        req.io.emit('update_dashboard');
+      }
 
       res.json({ message: 'Anda telah menolak job ini.', status: 'REJECTED' });
     } else {

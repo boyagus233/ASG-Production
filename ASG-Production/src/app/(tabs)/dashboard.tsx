@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Toast, ToastType } from '../../components/Toast';
 import { API_BASE_URL } from '../../config/api';
+import { socket } from '../../services/socket';
 
 export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
@@ -26,7 +27,21 @@ export default function DashboardScreen() {
 
   useEffect(() => {
     loadDashboardData();
-  }, []);
+
+    // ⚡ REAL-TIME SOCKET LISTENERS FOR DASHBOARD & NOTIFICATIONS
+    socket.on('update_dashboard', () => {
+      fetchStats();
+    });
+
+    socket.on('update_notifications', () => {
+      if (user?.id) fetchNotifications(user.id);
+    });
+
+    return () => {
+      socket.off('update_dashboard');
+      socket.off('update_notifications');
+    };
+  }, [user?.id]);
 
   const loadDashboardData = async () => {
     try {
@@ -89,7 +104,7 @@ export default function DashboardScreen() {
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>Dashboard Pekerjaan 💼</Text>
-          <Text style={styles.headerSubtitle}>Ringkasan Job Acara & Riwayat Selesai</Text>
+          <Text style={styles.headerSubtitle}>Ringkasan Job Acara & Riwayat Selesai (Real-Time)</Text>
         </View>
         <TouchableOpacity style={styles.refreshBtn} onPress={handleRefresh}>
           <Ionicons name="refresh" size={20} color="#1A1A1A" />
@@ -133,7 +148,7 @@ export default function DashboardScreen() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Ionicons name="notifications" size={20} color="#1A1A1A" />
-          <Text style={styles.sectionTitle}>Notifikasi & Status Respon Member</Text>
+          <Text style={styles.sectionTitle}>Notifikasi & Status Respon Member (Real-Time)</Text>
         </View>
 
         {notifications.length === 0 ? (

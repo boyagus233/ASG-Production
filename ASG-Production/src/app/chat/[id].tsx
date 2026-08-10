@@ -6,8 +6,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Location from 'expo-location';
 import { Toast, ToastType } from '../../components/Toast';
-
 import { API_BASE_URL as BASE_URL } from '../../config/api';
+import { socket } from '../../services/socket';
 
 export default function ChatRoom() {
   const { id, name } = useLocalSearchParams();
@@ -49,9 +49,30 @@ export default function ChatRoom() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(fetchMessages, 3000);
+
+    // ⚡ REAL-TIME SOCKET.IO LISTENERS FOR CHAT
+    socket.emit('join_group', id);
+
+    socket.on('receive_message', (newMsg: any) => {
+      setMessages((prev) => {
+        // Prevent duplicate messages if added locally
+        if (prev.some(m => m.id === newMsg.id)) return prev;
+        return [...prev, newMsg];
+      });
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+    });
+
+    socket.on('group_deleted', (data: any) => {
+      if (data.groupId.toString() === id?.toString()) {
+        showToast('Grup ini telah dibubarkan oleh Admin.', 'info');
+        setTimeout(() => router.replace('/(tabs)/chats'), 1500);
+      }
+    });
+
     return () => {
-      clearInterval(interval);
+      socket.emit('leave_group', id);
+      socket.off('receive_message');
+      socket.off('group_deleted');
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
@@ -108,19 +129,20 @@ export default function ChatRoom() {
     }
   };
 
-  // ─── SEND TEXT ───
+  // ─── SEND TEXT (REAL-TIME) ───
   const handleSendText = async () => {
     const text = inputText.trim();
     if (!text) return;
-    const tempMsg = { id: Date.now(), sender_id: user?.id, content: text, created_at: new Date().toISOString(), nama_lengkap: user?.nama_lengkap || user?.username };
-    setMessages(prev => [...prev, tempMsg]);
     setInputText('');
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+
     try {
-      await fetch(`${BASE_URL}/api/messages/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sender_id: user?.id, content: text }) });
+      await fetch(`${BASE_URL}/api/messages/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sender_id: user?.id, content: text }),
+      });
     } catch {
-      showToast('Gagal mengirim', 'error');
-      fetchMessages();
+      showToast('Gagal mengirim pesan', 'error');
     }
   };
 
@@ -189,12 +211,7 @@ export default function ChatRoom() {
 
         try {
           const res = await fetch(`${BASE_URL}/api/messages/${id}/upload`, { method: 'POST', body: formData });
-          if (res.ok) {
-            showToast('Voice note terkirim!', 'success');
-            fetchMessages();
-          } else {
-            showToast('Gagal mengirim voice note', 'error');
-          }
+          if (!res.ok) showToast('Gagal mengirim voice note', 'error');
         } catch {
           showToast('Terjadi kesalahan', 'error');
         }
@@ -239,8 +256,7 @@ export default function ChatRoom() {
       formData.append('sender_id', user.id);
       showToast('Mengunggah file...', 'info');
       const res = await fetch(`${BASE_URL}/api/messages/${id}/upload`, { method: 'POST', body: formData });
-      if (res.ok) { showToast('File terkirim!', 'success'); fetchMessages(); }
-      else showToast('Gagal mengunggah', 'error');
+      if (!res.ok) showToast('Gagal mengunggah', 'error');
     } catch { showToast('Terjadi kesalahan', 'error'); }
   };
 
@@ -249,18 +265,13 @@ export default function ChatRoom() {
     setIsAttachMenuVisible(false);
     setIsLoadingLocation(true);
     try {
-      // Try browser Geolocation API first (works on web)
       if (Platform.OS === 'web' && navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
           async (position) => {
             const { latitude, longitude } = position.coords;
             const mapUrl = `https://maps.google.com/?q=${latitude},${longitude}`;
             const locationText = `📍 Lokasi Saya:\n${mapUrl}`;
-            const tempMsg = { id: Date.now(), sender_id: user?.id, content: locationText, created_at: new Date().toISOString(), nama_lengkap: user?.nama_lengkap || user?.username };
-            setMessages(prev => [...prev, tempMsg]);
-            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
             await fetch(`${BASE_URL}/api/messages/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sender_id: user?.id, content: locationText }) });
-            showToast('Lokasi berhasil dikirim!', 'success');
             setIsLoadingLocation(false);
           },
           (error) => {
@@ -271,17 +282,13 @@ export default function ChatRoom() {
           { enableHighAccuracy: true, timeout: 10000 }
         );
       } else {
-        // Use expo-location for native
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') { showToast('Izin lokasi diperlukan', 'error'); setIsLoadingLocation(false); return; }
         const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
         const { latitude, longitude } = location.coords;
         const mapUrl = `https://maps.google.com/?q=${latitude},${longitude}`;
         const locationText = `📍 Lokasi Saya:\n${mapUrl}`;
-        const tempMsg = { id: Date.now(), sender_id: user?.id, content: locationText, created_at: new Date().toISOString(), nama_lengkap: user?.nama_lengkap || user?.username };
-        setMessages(prev => [...prev, tempMsg]);
         await fetch(`${BASE_URL}/api/messages/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sender_id: user?.id, content: locationText }) });
-        showToast('Lokasi berhasil dikirim!', 'success');
         setIsLoadingLocation(false);
       }
     } catch (err) {
@@ -520,7 +527,6 @@ const styles = StyleSheet.create({
   locationIconRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
   locationTitle: { fontSize: 14, fontWeight: 'bold', color: '#E53935', marginLeft: 8 },
   locationLink: { fontSize: 13, color: '#2196F3', textDecorationLine: 'underline' },
-  // Voice Note Player
   vnContainer: { flexDirection: 'row', alignItems: 'center', minWidth: 200, paddingVertical: 4 },
   vnPlayBtn: { width: 38, height: 38, borderRadius: 19, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
   vnPlayBtnMe: { backgroundColor: '#F9F6F0' },
@@ -530,14 +536,12 @@ const styles = StyleSheet.create({
   vnProgressFill: { height: '100%', borderRadius: 2 },
   vnWaveform: { flexDirection: 'row', alignItems: 'center', gap: 2, height: 28 },
   vnWaveBar: { width: 3, borderRadius: 2 },
-  // WhatsApp Input
   inputWrapper: { padding: 10, paddingBottom: Platform.OS === 'ios' ? 30 : 12, backgroundColor: '#F1EBE1' },
   inputPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 28, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1, borderColor: '#E0D8C8', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 3, elevation: 2 },
   iconBtn: { padding: 6 },
   textInput: { flex: 1, fontSize: 15, color: '#1A1A1A', paddingHorizontal: 8, paddingVertical: 8, maxHeight: 100 },
   micBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F1EBE1', justifyContent: 'center', alignItems: 'center', marginLeft: 4 },
   sendBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center', marginLeft: 4 },
-  // Recording Bar
   recordBar: { flexDirection: 'row', alignItems: 'center', padding: 12, paddingHorizontal: 16, paddingBottom: Platform.OS === 'ios' ? 30 : 12, backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#E0D8C8' },
   recordCancelBtn: { padding: 8 },
   recordingPulse: { marginLeft: 12 },
@@ -545,7 +549,6 @@ const styles = StyleSheet.create({
   recordTimeText: { fontSize: 16, fontWeight: 'bold', color: '#1A1A1A', marginLeft: 10 },
   recordLabel: { fontSize: 13, color: '#888', marginLeft: 8, flex: 1 },
   recordSendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center' },
-  // Modals
   modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 100, justifyContent: 'center', alignItems: 'center', padding: 20 },
   infoModal: { width: '100%', maxWidth: 450, maxHeight: '80%', backgroundColor: '#FFF', borderRadius: 24, padding: 20 },
   infoModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },

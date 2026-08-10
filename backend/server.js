@@ -19,6 +19,12 @@ const io = new Server(server, {
 
 const path = require('path');
 
+// Socket.io Middleware untuk Inject `io` ke REST API Routes
+app.use((req, res, next) => {
+  req.io = io;
+  next();
+});
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -31,12 +37,30 @@ app.use('/api/groups', groupRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/notifications', notificationRoutes);
 
-// Socket.io Connection
+// Socket.io Connection Logic
 io.on('connection', (socket) => {
-  console.log('A user connected:', socket.id);
+  console.log('⚡ Socket client connected:', socket.id);
+
+  // Masuk ke room grup chat tertentu
+  socket.on('join_group', (groupId) => {
+    socket.join(`group_${groupId}`);
+    console.log(`Socket ${socket.id} joined group_${groupId}`);
+  });
+
+  // Keluar dari room grup chat
+  socket.on('leave_group', (groupId) => {
+    socket.leave(`group_${groupId}`);
+    console.log(`Socket ${socket.id} left group_${groupId}`);
+  });
+
+  // User join room personal
+  socket.on('join_user', (userId) => {
+    socket.join(`user_${userId}`);
+    console.log(`Socket ${socket.id} joined user_${userId}`);
+  });
 
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+    console.log('⚡ Socket client disconnected:', socket.id);
   });
 });
 

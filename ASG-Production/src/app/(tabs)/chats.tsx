@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { Toast, ToastType } from '../../components/Toast';
 import { API_BASE_URL } from '../../config/api';
+import { socket } from '../../services/socket';
 
 export default function ChatsScreen() {
   const [user, setUser] = useState<any>(null);
@@ -33,13 +34,28 @@ export default function ChatsScreen() {
 
   useEffect(() => {
     loadUserAndData();
+
+    // ⚡ REAL-TIME SOCKET LISTENERS FOR GROUPS & INVITATIONS
+    socket.on('update_groups', () => {
+      if (user?.id) fetchGroups(user.id);
+    });
+
+    socket.on('update_invitations', () => {
+      if (user?.id) fetchPendingInvitations(user.id);
+    });
+
     // Minta izin notifikasi browser jika tersedia
     if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
       if (Notification.permission === 'default') {
         Notification.requestPermission();
       }
     }
-  }, []);
+
+    return () => {
+      socket.off('update_groups');
+      socket.off('update_invitations');
+    };
+  }, [user?.id]);
 
   const loadUserAndData = async () => {
     try {
@@ -77,7 +93,6 @@ export default function ChatsScreen() {
       const data = await res.json();
       setInvitations(data);
 
-      // Memicu notifikasi HP asli jika ada undangan baru
       if (data.length > 0 && Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
         if (Notification.permission === 'granted') {
           new Notification('Tawaran Job Baru! 💼', {
@@ -105,7 +120,7 @@ export default function ChatsScreen() {
     }
   };
 
-  // Respon Anggota terhadap Undangan (ACCEPT / REJECT)
+  // Respon Anggota terhadap Undangan (ACCEPT / REJECT) - REAL-TIME
   const handleRespondInvitation = async (invitationId: number, action: 'ACCEPT' | 'REJECT', groupName: string) => {
     try {
       showToast(`Memproses respon ${action === 'ACCEPT' ? 'Terima' : 'Tolak'}...`, 'info');
@@ -124,7 +139,6 @@ export default function ChatsScreen() {
         } else {
           showToast(`Job ${groupName} telah ditolak.`, 'info');
         }
-        // Refresh data grup dan undangan
         fetchGroups(user.id);
         fetchPendingInvitations(user.id);
       } else {
@@ -135,7 +149,6 @@ export default function ChatsScreen() {
     }
   };
 
-  // Tambah Member ke List Sementara Form Modal
   const handleAddMemberToList = () => {
     if (!selectedMemberId) {
       showToast('Pilih nama lengkap member terlebih dahulu!', 'error');
@@ -207,7 +220,7 @@ export default function ChatsScreen() {
     };
 
     if (Platform.OS === 'web') {
-      if (window.confirm(`Apakah Anda yakin ingin MENYELESAIKAN & MENGHAPUS grup "${groupName}"?\nGrup akan diarsipkan ke Riwayat Job Selesai Admin.`)) {
+      if (window.confirm(`Apakah Anda yakin ingin MENYELESAIKAN & MENGHAPUS grup "${groupName}"?\nGrup akan diarsipkan ke Riwayat Job Selesai Admin secara real-time.`)) {
         confirmDelete();
       }
     } else {
@@ -219,7 +232,7 @@ export default function ChatsScreen() {
   };
 
   const filteredUsersForDropdown = allUsers.filter(u => {
-    if (u.id === user?.id) return false; // Jangan tampilkan diri sendiri
+    if (u.id === user?.id) return false;
     if (selectedRole !== 'ALL' && u.id_role?.toString() !== selectedRole) return false;
     return true;
   });
@@ -380,7 +393,7 @@ export default function ChatsScreen() {
         </View>
       )}
 
-      {/* LIST KARTU UNDANGAN JOB PENDING (JIKA ADA) */}
+      {/* LIST KARTU UNDANGAN JOB PENDING (REAL-TIME) */}
       {invitations.length > 0 && (
         <View style={styles.invitationSection}>
           <Text style={styles.invitationSectionTitle}>💼 Tawaran Job Baru ({invitations.length})</Text>
@@ -415,7 +428,7 @@ export default function ChatsScreen() {
         </View>
       )}
 
-      {/* LIST GRUP AKTIF */}
+      {/* LIST GRUP AKTIF (REAL-TIME) */}
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator size="large" color="#1A1A1A" />
