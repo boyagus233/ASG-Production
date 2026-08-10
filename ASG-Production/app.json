@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "ASG-Production",
-    "slug": "ASG-Production",
+    "slug": "asg-production",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -45,6 +45,11 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "de5b343d-79ad-436b-9298-2dbb018d51e2"
+      }
     }
   }
 }

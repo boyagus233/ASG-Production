@@ -8,6 +8,9 @@ node_modules/
 dist/
 web-build/
 *.apk
+*.msi
+*.zip
+cloudflared.exe
 
 # Android build outputs
 android/build/
