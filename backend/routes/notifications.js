@@ -35,5 +35,23 @@ router.post('/read-all', async (req, res) => {
     res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
   }
 });
+// Simpan push token user
+router.post('/register-token', async (req, res) => {
+  const { userId, pushToken } = req.body;
+  if (!userId || !pushToken) return res.status(400).json({ error: 'userId dan pushToken diperlukan!' });
+
+  try {
+    const query = `
+      INSERT INTO user_push_tokens (user_id, push_token)
+      VALUES ($1, $2)
+      ON CONFLICT (user_id) DO UPDATE SET push_token = EXCLUDED.push_token, updated_at = NOW()
+    `;
+    await db.query(query, [userId, pushToken]);
+    res.json({ message: 'Token berhasil disimpan.' });
+  } catch (error) {
+    console.error('Error saving push token:', error);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
 
 module.exports = router;

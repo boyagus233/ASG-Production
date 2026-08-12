@@ -28,7 +28,15 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "bundler": "metro",
+      "favicon": "./assets/images/favicon.png",
+      "name": "ASG Production",
+      "shortName": "ASG",
+      "themeColor": "#208AEF",
+      "backgroundColor": "#F1EBE1",
+      "display": "standalone",
+      "scope": "/",
+      "startUrl": "/"
     },
     "plugins": [
       "expo-router",
@@ -39,13 +47,8 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
-      ],
-      "expo-audio"
+      ]
     ],
-    "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
-    },
     "extra": {
       "eas": {
         "projectId": "de5b343d-79ad-436b-9298-2dbb018d51e2"

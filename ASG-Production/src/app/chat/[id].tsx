@@ -8,6 +8,34 @@ import * as Location from 'expo-location';
 import { Toast, ToastType } from '../../components/Toast';
 import { API_BASE_URL as BASE_URL } from '../../config/api';
 import { socket } from '../../services/socket';
+import { Capacitor } from '@capacitor/core';
+import { Image as ExpoImage } from 'expo-image';
+
+// ─── KOMPONEN GAMBAR REMOTE UNTUK MENGATASI BLOKIR WEBVIEW ───
+const RemoteImage = ({ uri, style }: { uri: string, style: any }) => {
+  const [blobUri, setBlobUri] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch(uri)
+      .then(res => res.blob())
+      .then(blob => {
+        if (active) {
+          const objectUrl = URL.createObjectURL(blob);
+          setBlobUri(objectUrl);
+        }
+      })
+      .catch(err => console.error('Gagal fetch gambar:', err));
+    return () => { active = false; };
+  }, [uri]);
+
+  if (!blobUri) {
+    return <View style={[style, { backgroundColor: '#333', justifyContent: 'center', alignItems: 'center' }]}>
+      <ActivityIndicator color="#fff" />
+    </View>;
+  }
+  return <ExpoImage source={{ uri: blobUri }} style={style} contentFit="cover" />;
+};
 
 export default function ChatRoom() {
   const { id, name } = useLocalSearchParams();
@@ -25,7 +53,7 @@ export default function ChatRoom() {
 
   // Playback state
   const [playingAudioId, setPlayingAudioId] = useState<number | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioRef = useRef<Audio.Sound | null>(null);
   const [playbackProgress, setPlaybackProgress] = useState(0);
 
   // Location
@@ -74,7 +102,7 @@ export default function ChatRoom() {
       socket.off('receive_message');
       socket.off('group_deleted');
       if (audioRef.current) {
-        audioRef.current.pause();
+        audioRef.current.unloadAsync();
         audioRef.current = null;
       }
     };
@@ -157,7 +185,9 @@ export default function ChatRoom() {
           return;
         }
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mediaRecorder = new MediaRecorder(stream);
+        // Force audio/webm so window.Audio doesn't throw NotSupportedError because of video/webm
+        const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? { mimeType: 'audio/webm;codecs=opus' } : (MediaRecorder.isTypeSupported('audio/webm') ? { mimeType: 'audio/webm' } : undefined);
+        const mediaRecorder = new MediaRecorder(stream, options);
         audioChunksRef.current = [];
 
         mediaRecorder.ondataavailable = (e: any) => {
@@ -223,24 +253,59 @@ export default function ChatRoom() {
     });
   };
 
-  // ─── AUDIO PLAYBACK (Web Audio) ───
-  const handlePlayAudio = (msgId: number, audioUrl: string) => {
+  // ─── AUDIO PLAYBACK (Expo AV) ───
+  const handlePlayAudio = async (msgId: number, audioUrl: string) => {
     if (playingAudioId === msgId) {
-      if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+      if (audioRef.current) { 
+        try { await audioRef.current.stopAsync(); await audioRef.current.unloadAsync(); } catch(e){}
+        audioRef.current = null; 
+      }
       setPlayingAudioId(null);
       setPlaybackProgress(0);
       return;
     }
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    
+    // Stop previous
+    if (audioRef.current) { 
+      try {
+        (audioRef.current as any).pause();
+        (audioRef.current as any).src = '';
+      } catch(e){}
+      audioRef.current = null; 
+    }
 
-    const audio = new Audio(`${BASE_URL}${audioUrl}`);
-    audio.ontimeupdate = () => {
-      if (audio.duration) setPlaybackProgress(audio.currentTime / audio.duration);
-    };
-    audio.onended = () => { setPlayingAudioId(null); setPlaybackProgress(0); audioRef.current = null; };
-    audio.play();
-    audioRef.current = audio;
-    setPlayingAudioId(msgId);
+    try {
+      const audioUrlFull = `${BASE_URL}${audioUrl}`;
+      
+      // Bypass WebView HTTP block by fetching as Blob first (sama seperti RemoteImage)
+      const response = await fetch(audioUrlFull);
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+
+      // Gunakan video element agar bisa memutar container video/webm
+      const audio = document.createElement('video');
+      audio.src = objectUrl;
+      audioRef.current = audio as any;
+      setPlayingAudioId(msgId);
+
+      audio.addEventListener('timeupdate', () => {
+        if (audio.duration) {
+          setPlaybackProgress(audio.currentTime / audio.duration);
+        }
+      });
+
+      audio.addEventListener('ended', () => {
+        setPlayingAudioId(null);
+        setPlaybackProgress(0);
+        audioRef.current = null;
+        URL.revokeObjectURL(objectUrl);
+      });
+
+      await audio.play();
+    } catch (e: any) {
+      console.error('Audio play error:', e);
+      alert(`INFO VN ERROR:\nName: ${e.name}\nMessage: ${e.message}\nString: ${JSON.stringify(e)}\nURL: ${BASE_URL}${audioUrl}`);
+    }
   };
 
   // ─── UPLOAD FILE / PHOTO ───
@@ -251,13 +316,34 @@ export default function ChatRoom() {
       if (result.canceled) return;
       const file = result.assets[0];
       const formData = new FormData();
-      // @ts-ignore
-      formData.append('file', { uri: file.uri, name: file.name, type: file.mimeType || 'application/octet-stream' });
+      
+      if (Platform.OS === 'web') {
+        // Gunakan object DOM File asli jika ada, untuk menghindari error fetch URI blob/data
+        if (file.file) {
+          formData.append('file', file.file);
+        } else {
+          const response = await fetch(file.uri);
+          const blob = await response.blob();
+          formData.append('file', blob, file.name);
+        }
+      } else {
+         const webPath = Capacitor.convertFileSrc(file.uri);
+         const response = await fetch(webPath);
+         const blob = await response.blob();
+         formData.append('file', blob, file.name);
+      }
+
       formData.append('sender_id', user.id);
       showToast('Mengunggah file...', 'info');
       const res = await fetch(`${BASE_URL}/api/messages/${id}/upload`, { method: 'POST', body: formData });
-      if (!res.ok) showToast('Gagal mengunggah', 'error');
-    } catch { showToast('Terjadi kesalahan', 'error'); }
+      if (!res.ok) {
+        const errorText = await res.text();
+        alert(`Gagal mengunggah: Server membalas ${res.status} - ${errorText}`);
+      }
+    } catch (e: any) { 
+      console.error(e);
+      alert(`Terjadi kesalahan saat unggah: ${e.message || JSON.stringify(e)}`);
+    }
   };
 
   // ─── REAL LOCATION (GPS) ───
@@ -325,7 +411,7 @@ export default function ChatRoom() {
         <View style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleOther]}>
 
           {imageFile ? (
-            <Image source={{ uri: `${BASE_URL}${item.attachment_url}` }} style={styles.attachmentImage} resizeMode="cover" />
+            <RemoteImage uri={`${BASE_URL}${item.attachment_url}`} style={styles.attachmentImage} />
           ) : null}
 
           {audioFile ? (

@@ -1,5 +1,8 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
 require('dotenv').config();
+
+// Fix Timezone Issue: Treat PostgreSQL TIMESTAMP without timezone as UTC
+types.setTypeParser(1114, str => new Date(str + 'Z'));
 
 // Konfigurasi otomatis: Gunakan DATABASE_URL (Supabase/Render) jika ada, atau fallback ke Lokal
 const isProduction = !!process.env.DATABASE_URL;

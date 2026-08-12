@@ -59,6 +59,20 @@ export default function Login() {
       await AsyncStorage.setItem('userToken', data.token);
       await AsyncStorage.setItem('userData', JSON.stringify(data.user));
       
+      // Register push token if available
+      try {
+        const pushToken = await AsyncStorage.getItem('pushToken');
+        if (pushToken) {
+          await fetch(`${API_BASE_URL}/api/notifications/register-token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: data.user.id, pushToken })
+          });
+        }
+      } catch (e) {
+        console.error('Failed to register push token after login:', e);
+      }
+
       showToast('Login berhasil! Mengalihkan...', 'success');
       setTimeout(() => {
         router.replace('/(tabs)/chats');

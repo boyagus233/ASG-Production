@@ -51,6 +51,36 @@ router.post('/:groupId', async (req, res) => {
       req.io.emit('update_groups'); // refresh order di list chat
     }
 
+    // PUSH NOTIFICATIONS
+    try {
+      const { sendPushNotification } = require('../firebase');
+      // Ambil token push semua anggota grup KECUALI sender
+      const tokenQuery = `
+        SELECT t.push_token 
+        FROM user_push_tokens t
+        JOIN group_members gm ON t.user_id = gm.user_id
+        WHERE gm.group_id = $1 AND gm.user_id != $2
+      `;
+      const tokenRes = await db.query(tokenQuery, [groupId, sender_id]);
+      const tokens = tokenRes.rows.map(r => r.push_token).filter(Boolean);
+      
+      if (tokens.length > 0) {
+        // Ambil nama grup
+        const groupRes = await db.query('SELECT name FROM groups WHERE id = $1', [groupId]);
+        const groupName = groupRes.rows[0]?.name || 'Grup';
+        const senderName = newMsg.nama_lengkap || newMsg.username || 'Seseorang';
+        
+        await sendPushNotification(
+          tokens,
+          `${groupName}`,
+          `${senderName}: ${content || 'Mengirim file'}`,
+          { type: 'chat', groupId: groupId.toString() }
+        );
+      }
+    } catch (pushErr) {
+      console.error('Error sending push:', pushErr);
+    }
+
     res.status(201).json({ message: 'Pesan terkirim!', data: newMsg });
   } catch (error) {
     console.error('Error sending message:', error);
@@ -102,6 +132,37 @@ router.post('/:groupId/upload', upload.single('file'), async (req, res) => {
     if (req.io) {
       req.io.to(`group_${groupId}`).emit('receive_message', newMsg);
       req.io.emit('update_groups');
+    }
+
+    // PUSH NOTIFICATIONS
+    try {
+      const { sendPushNotification } = require('../firebase');
+      const tokenQuery = `
+        SELECT t.push_token 
+        FROM user_push_tokens t
+        JOIN group_members gm ON t.user_id = gm.user_id
+        WHERE gm.group_id = $1 AND gm.user_id != $2
+      `;
+      const tokenRes = await db.query(tokenQuery, [groupId, sender_id]);
+      const tokens = tokenRes.rows.map(r => r.push_token).filter(Boolean);
+      
+      if (tokens.length > 0) {
+        const groupRes = await db.query('SELECT name FROM groups WHERE id = $1', [groupId]);
+        const groupName = groupRes.rows[0]?.name || 'Grup';
+        const senderName = newMsg.nama_lengkap || newMsg.username || 'Seseorang';
+        let fileType = 'Mengirim file';
+        if (attachment_url.match(/\.(jpeg|jpg|gif|png|webp)$/i)) fileType = 'Mengirim foto';
+        if (attachment_url.match(/\.(m4a|mp3|wav|ogg|aac|webm)$/i)) fileType = 'Mengirim pesan suara';
+        
+        await sendPushNotification(
+          tokens,
+          `${groupName}`,
+          `${senderName}: ${fileType}`,
+          { type: 'chat', groupId: groupId.toString() }
+        );
+      }
+    } catch (pushErr) {
+      console.error('Error sending push:', pushErr);
     }
 
     res.status(201).json({ message: 'File berhasil diunggah!', data: newMsg });

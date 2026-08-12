@@ -25,6 +25,18 @@ const createNotification = async (req, userId, title, body) => {
       req.io.to(`user_${userId}`).emit('new_job_invitation', { title, body });
       req.io.emit('update_notifications');
     }
+
+    // PUSH NOTIFICATION (FCM)
+    try {
+      const { sendPushNotification } = require('../firebase');
+      const tokenRes = await db.query('SELECT push_token FROM user_push_tokens WHERE user_id = $1', [userId]);
+      const tokens = tokenRes.rows.map(r => r.push_token).filter(Boolean);
+      if (tokens.length > 0) {
+        await sendPushNotification(tokens, title, body, { type: 'job' });
+      }
+    } catch (pushErr) {
+      console.error('Push Notification Error (Jobs):', pushErr);
+    }
   } catch (err) {
     console.error('Create Notification Error:', err);
   }
@@ -127,6 +139,9 @@ router.delete('/:id', async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
     `, [targetGroup.id, targetGroup.name, targetGroup.owner_id, targetGroup.member_count, targetGroup.created_at]);
 
+    // Ambil semua member (selain admin) untuk dikirimkan notifikasi
+    const membersRes = await db.query('SELECT user_id FROM group_members WHERE group_id = $1 AND user_id != $2', [id, userId]);
+
     // Hapus grup
     await db.query('DELETE FROM groups WHERE id = $1', [id]);
 
@@ -137,6 +152,16 @@ router.delete('/:id', async (req, res) => {
       req.io.emit('update_groups');
       req.io.emit('update_dashboard');
       req.io.to(`group_${id}`).emit('group_deleted', { groupId: id });
+    }
+
+    // Kirim Notifikasi ke Semua Member yang Terlibat
+    for (const row of membersRes.rows) {
+      await createNotification(
+        req,
+        row.user_id,
+        'Job Telah Selesai! ✅',
+        `Admin telah menyelesaikan dan menutup job "${targetGroup.name}". Terima kasih atas partisipasinya!`
+      );
     }
 
     res.json({ message: 'Grup berhasil diselesaikan dan diarsipkan ke Riwayat Job!' });

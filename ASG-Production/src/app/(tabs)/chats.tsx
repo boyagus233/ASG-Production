@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Platform, TextInput, Alert, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Toast, ToastType } from '../../components/Toast';
 import { API_BASE_URL } from '../../config/api';
 import { socket } from '../../services/socket';
@@ -26,15 +26,32 @@ export default function ChatsScreen() {
   const [selectedMemberId, setSelectedMemberId] = useState<string>('');
   const [selectedMembers, setSelectedMembers] = useState<any[]>([]);
 
+  // ─── FITUR AUTO-SYNC ROLE (MIND-BLOWING MAGIC AUTO-FILL) ───
+  useEffect(() => {
+    if (selectedRole !== 'ALL' && allUsers.length > 0) {
+      const usersWithRole = allUsers.filter(u => u.id !== user?.id && u.id_role?.toString() === selectedRole);
+      setSelectedMembers(usersWithRole);
+      if (usersWithRole.length > 0) {
+        showToast(`✨ Magic! ${usersWithRole.length} anggota otomatis ditambahkan!`, 'success');
+      } else {
+        showToast(`Tidak ada anggota dengan role ini.`, 'info');
+      }
+    } else if (selectedRole === 'ALL') {
+      setSelectedMembers([]);
+    }
+  }, [selectedRole, allUsers, user?.id]);
+
   const showToast = (message: string, type: ToastType) => {
     setToast({ visible: true, message, type });
   };
 
   const finalGroupName = `${formatIndoDate(groupDate)} ${groupLocation.trim()}`;
 
-  useEffect(() => {
-    loadUserAndData();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      loadUserAndData();
+    }, [])
+  );
 
   useEffect(() => {
     if (!user?.id) return;
@@ -128,8 +145,15 @@ export default function ChatsScreen() {
       ]);
       const usersData = await usersRes.json();
       const rolesData = await rolesRes.json();
+      
+      // Filter role: hanya tampilkan role yang memiliki minimal 1 anggota (selain user yg login)
+      // Note: we can't reliably use user.id here if user isn't set yet, so just check all members
+      const activeRoles = rolesData.filter((r: any) => 
+        usersData.some((u: any) => u.id_role === r.id)
+      );
+
       setAllUsers(usersData);
-      setRoles(rolesData);
+      setRoles(activeRoles);
     } catch (error) {
       console.error('Failed to fetch users or roles');
     }
@@ -413,30 +437,45 @@ export default function ChatsScreen() {
         <View style={styles.invitationSection}>
           <Text style={styles.invitationSectionTitle}>💼 Tawaran Job Baru ({invitations.length})</Text>
           {invitations.map((inv) => (
-            <View key={inv.invitation_id} style={styles.invitationCard}>
-              <View style={styles.invitationHeader}>
-                <Ionicons name="briefcase-outline" size={22} color="#1A1A1A" />
-                <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={styles.invitationTitle}>{inv.group_name}</Text>
-                  <Text style={styles.invitationSub}>Oleh: {inv.owner_name || 'Admin'}</Text>
+            <View key={inv.invitation_id} style={styles.vipTicketCard}>
+              <View style={styles.vipTicketHeader}>
+                <Ionicons name="ticket" size={24} color="#D4AF37" />
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.vipTicketTitle}>{inv.group_name}</Text>
+                  <Text style={styles.vipTicketSub}>VIP Invite from: {inv.owner_name || 'Admin'}</Text>
+                </View>
+                <View style={styles.vipBadge}>
+                  <Text style={styles.vipBadgeText}>VIP</Text>
                 </View>
               </View>
-              <Text style={styles.invitationPrompt}>Apakah Anda bersedia mengikuti job ini?</Text>
-              <View style={styles.invitationActions}>
-                <TouchableOpacity
-                  style={styles.rejectBtn}
-                  onPress={() => handleRespondInvitation(inv.invitation_id, 'REJECT', inv.group_name)}
-                >
-                  <Ionicons name="close-circle" size={18} color="#FF3B30" style={{ marginRight: 4 }} />
-                  <Text style={styles.rejectBtnText}>Tolak</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.acceptBtn}
-                  onPress={() => handleRespondInvitation(inv.invitation_id, 'ACCEPT', inv.group_name)}
-                >
-                  <Ionicons name="checkmark-circle" size={18} color="#FFF" style={{ marginRight: 4 }} />
-                  <Text style={styles.acceptBtnText}>Terima Job</Text>
-                </TouchableOpacity>
+              
+              <View style={styles.ticketDivider}>
+                <View style={styles.ticketHoleLeft} />
+                <View style={styles.ticketDashedLine} />
+                <View style={styles.ticketHoleRight} />
+              </View>
+
+              <Text style={styles.vipTicketPrompt}>Kamu menerima akses VIP untuk Job ini. Terima sekarang?</Text>
+              
+              <View style={styles.vipTicketActions}>
+                <Ionicons name="barcode-outline" size={36} color="#1A1A1A" style={{ opacity: 0.6 }} />
+                
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  <TouchableOpacity
+                    style={styles.rejectBtn}
+                    onPress={() => handleRespondInvitation(inv.invitation_id, 'REJECT', inv.group_name)}
+                  >
+                    <Ionicons name="close-circle" size={18} color="#FF3B30" style={{ marginRight: 4 }} />
+                    <Text style={styles.rejectBtnText}>Tolak</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.acceptBtn}
+                    onPress={() => handleRespondInvitation(inv.invitation_id, 'ACCEPT', inv.group_name)}
+                  >
+                    <Ionicons name="checkmark-circle" size={18} color="#FFF" style={{ marginRight: 4 }} />
+                    <Text style={styles.acceptBtnText}>Terima</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
           ))}
@@ -490,19 +529,25 @@ const styles = StyleSheet.create({
   welcomeText: { fontSize: 13, color: '#666', marginTop: 2 },
   createBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center' },
 
-  // Invitations
-  invitationSection: { padding: 16, backgroundColor: '#FFF3E0', borderBottomWidth: 1, borderBottomColor: '#FFE0B2' },
-  invitationSectionTitle: { fontSize: 14, fontWeight: 'bold', color: '#E65100', marginBottom: 10 },
-  invitationCard: { backgroundColor: '#FFF', padding: 14, borderRadius: 14, borderWidth: 1, borderColor: '#FFE0B2', marginBottom: 8 },
-  invitationHeader: { flexDirection: 'row', alignItems: 'center' },
-  invitationTitle: { fontSize: 16, fontWeight: 'bold', color: '#1A1A1A' },
-  invitationSub: { fontSize: 12, color: '#666' },
-  invitationPrompt: { fontSize: 13, color: '#444', marginVertical: 8 },
-  invitationActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 4 },
-  rejectBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#FF3B30', backgroundColor: '#FFF' },
-  rejectBtnText: { color: '#FF3B30', fontWeight: 'bold', fontSize: 13 },
-  acceptBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, backgroundColor: '#4CAF50' },
-  acceptBtnText: { color: '#FFF', fontWeight: 'bold', fontSize: 13 },
+  // Invitations (VIP TICKET DESIGN)
+  invitationSection: { padding: 16, backgroundColor: '#1A1A1A' },
+  invitationSectionTitle: { fontSize: 16, fontWeight: 'bold', color: '#D4AF37', marginBottom: 12, letterSpacing: 1 },
+  vipTicketCard: { backgroundColor: '#FDFBF7', borderRadius: 16, marginBottom: 12, elevation: 4, shadowColor: '#D4AF37', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 6, overflow: 'hidden' },
+  vipTicketHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: '#2C2C2C' },
+  vipTicketTitle: { fontSize: 18, fontWeight: '900', color: '#D4AF37', textTransform: 'uppercase', letterSpacing: 0.5 },
+  vipTicketSub: { fontSize: 12, color: '#A0A0A0', marginTop: 2 },
+  vipBadge: { backgroundColor: '#D4AF37', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  vipBadgeText: { color: '#1A1A1A', fontWeight: 'bold', fontSize: 12, letterSpacing: 1 },
+  ticketDivider: { flexDirection: 'row', alignItems: 'center', height: 20, backgroundColor: '#2C2C2C' },
+  ticketHoleLeft: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#1A1A1A', marginLeft: -10 },
+  ticketDashedLine: { flex: 1, height: 1, borderWidth: 1, borderColor: '#D4AF37', borderStyle: 'dashed', marginHorizontal: 10, opacity: 0.5 },
+  ticketHoleRight: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#1A1A1A', marginRight: -10 },
+  vipTicketPrompt: { fontSize: 14, color: '#333', textAlign: 'center', marginVertical: 12, fontWeight: '600', paddingHorizontal: 16 },
+  vipTicketActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: 0 },
+  rejectBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: '#FF3B30', backgroundColor: '#FFF' },
+  rejectBtnText: { color: '#FF3B30', fontWeight: 'bold', fontSize: 14 },
+  acceptBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, backgroundColor: '#D4AF37', elevation: 2 },
+  acceptBtnText: { color: '#1A1A1A', fontWeight: 'bold', fontSize: 14 },
 
   // Groups
   listContainer: { padding: 20 },

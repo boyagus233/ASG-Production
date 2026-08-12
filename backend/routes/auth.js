@@ -20,7 +20,8 @@ router.post('/signup', async (req, res) => {
       return res.status(400).json({ error: 'Username atau email sudah terdaftar!' });
     }
 
-    const hashedPassword = password;
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
     const roleResult = await db.query("SELECT id FROM roles WHERE role_name = 'Anggota'");
     const roleId = roleResult.rows[0].id;
@@ -55,9 +56,14 @@ router.post('/login', async (req, res) => {
 
     const user = userResult.rows[0];
 
-    // 2. Verifikasi password 
-    // (Jika pakai bcrypt: const isMatch = await bcrypt.compare(password, user.password); )
-    const isMatch = (password === user.password); 
+    let isMatch = (password === user.password);
+    if (!isMatch) {
+      try {
+        isMatch = await bcrypt.compare(password, user.password);
+      } catch (e) {
+        isMatch = false;
+      }
+    }
 
     if (!isMatch) {
       return res.status(401).json({ error: 'Kredensial tidak valid!' });

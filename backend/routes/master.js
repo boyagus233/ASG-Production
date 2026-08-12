@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-
+const bcrypt = require('bcrypt');
 // --- ROUTES FOR ROLES ---
 
 // Ambil semua roles
@@ -40,7 +40,7 @@ router.post('/roles', async (req, res) => {
 router.get('/users', async (req, res) => {
   try {
     const query = `
-      SELECT u.id, u.username, u.nama_lengkap, u.email, u.jenis_kelamin, u.tanggal_lahir, r.role_name 
+      SELECT u.id, u.username, u.nama_lengkap, u.email, u.jenis_kelamin, u.tanggal_lahir, u.id_role, r.role_name 
       FROM users u
       LEFT JOIN roles r ON u.id_role = r.id
       ORDER BY u.created_at DESC
@@ -65,11 +65,14 @@ router.post('/users', async (req, res) => {
     const check = await db.query('SELECT * FROM users WHERE username = $1 OR email = $2', [username, email]);
     if (check.rows.length > 0) return res.status(400).json({ error: 'Username atau email sudah digunakan!' });
 
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
     const insertQuery = `
       INSERT INTO users (username, email, password, nama_lengkap, id_role, tanggal_lahir, jenis_kelamin)
       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, username, email, id_role
     `;
-    const result = await db.query(insertQuery, [username, email, password, nama_lengkap || username, id_role, tanggal_lahir || null, jenis_kelamin || null]);
+    const result = await db.query(insertQuery, [username, email, hashedPassword, nama_lengkap || username, id_role, tanggal_lahir || null, jenis_kelamin || null]);
     res.status(201).json({ message: 'User berhasil ditambahkan!', user: result.rows[0] });
   } catch (error) {
     console.error('Error adding user:', error);
@@ -115,8 +118,10 @@ router.put('/users/:id', async (req, res) => {
   try {
     let query, values;
     if (password) {
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(password, salt);
       query = 'UPDATE users SET username=$1, email=$2, password=$3, nama_lengkap=$4, id_role=$5, tanggal_lahir=$6, jenis_kelamin=$7 WHERE id=$8 RETURNING id, username';
-      values = [username, email, password, nama_lengkap || username, id_role, tanggal_lahir || null, jenis_kelamin || null, id];
+      values = [username, email, hashedPassword, nama_lengkap || username, id_role, tanggal_lahir || null, jenis_kelamin || null, id];
     } else {
       query = 'UPDATE users SET username=$1, email=$2, nama_lengkap=$3, id_role=$4, tanggal_lahir=$5, jenis_kelamin=$6 WHERE id=$7 RETURNING id, username';
       values = [username, email, nama_lengkap || username, id_role, tanggal_lahir || null, jenis_kelamin || null, id];

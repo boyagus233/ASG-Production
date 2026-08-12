@@ -1,0 +1,15 @@
+{
+  "short_name": "ASG",
+  "name": "ASG Production",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "192x192 512x512",
+      "type": "image/png"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#F1EBE1",
+  "background_color": "#F1EBE1"
+}

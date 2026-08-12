@@ -1,19 +1,9 @@
-const { Client } = require('pg');
+const db = require('./db');
 
 async function setupDB() {
-  const client = new Client({
-    user: 'postgres',
-    password: '@Naruto233', // Password yang diberikan user
-    host: 'localhost',
-    port: 2002,
-    database: 'postgres'
-  });
-
   try {
-    await client.connect();
-    console.log('Berhasil terhubung ke database PostgreSQL di port 2002!');
+    console.log('Berhasil terhubung ke database PostgreSQL via db.js!');
 
-    // Coba jalankan query pembuatan tabel
     const query = `
       -- 1. Tabel Role
       CREATE TABLE IF NOT EXISTS roles (
@@ -38,26 +28,28 @@ async function setupDB() {
       );
     `;
 
-    await client.query(query);
+    await db.query(query);
     console.log('Tabel roles dan users berhasil dibuat/dicek keberadaannya!');
 
     // 3. Tambahkan User Admin
-    // Kita cari id_role untuk 'Admin' terlebih dahulu
-    const roleResult = await client.query("SELECT id FROM roles WHERE role_name = 'Admin'");
-    const adminRoleId = roleResult.rows[0].id;
+    let adminRoleId = 1; // Fallback ke 1
+    const roleResult = await db.query("SELECT id FROM roles WHERE role_name ILIKE '%Admin%'");
+    if (roleResult.rows.length > 0) {
+      adminRoleId = roleResult.rows[0].id;
+    }
 
     const insertAdminQuery = `
       INSERT INTO users (username, nama_lengkap, email, password, id_role) 
       VALUES ('admin', 'Administrator', 'admin@asgproduction.com', 'admin', $1)
       ON CONFLICT (username) DO NOTHING;
     `;
-    await client.query(insertAdminQuery, [adminRoleId]);
+    await db.query(insertAdminQuery, [adminRoleId]);
     console.log('User admin berhasil dibuat (jika belum ada). Username: admin, Password: admin');
 
   } catch (error) {
     console.error('Terjadi kesalahan saat mengeksekusi database:', error.message);
   } finally {
-    await client.end();
+    process.exit();
   }
 }
 
