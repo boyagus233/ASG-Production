@@ -54,9 +54,7 @@ apiApp.get('/', (req, res) => {
 // 2. PWA APP (PORT 3001)
 const pwaApp = express();
 setupApiApp(pwaApp);
-const pwaDir = fs.existsSync(path.join(__dirname, '../ASG-Production/dist'))
-  ? path.join(__dirname, '../ASG-Production/dist')
-  : path.join(__dirname, 'public');
+const pwaDir = path.join(__dirname, 'public');
 
 pwaApp.use(express.static(pwaDir));
 pwaApp.use((req, res, next) => {

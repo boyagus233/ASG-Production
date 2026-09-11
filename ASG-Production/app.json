@@ -37,7 +37,7 @@
       "favicon": "./assets/images/favicon.png",
       "name": "ASG Production",
       "shortName": "ASG",
-      "themeColor": "#208AEF",
+      "themeColor": "#F1EBE1",
       "backgroundColor": "#F1EBE1",
       "display": "standalone",
       "scope": "/",
