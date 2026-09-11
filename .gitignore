@@ -1,6 +1,8 @@
 # Dependencies
 node_modules/
 **/node_modules/
+!backend/public/assets/node_modules/
+!backend/public/assets/node_modules/**
 
 # Expo & Build Artifacts
 .expo/
