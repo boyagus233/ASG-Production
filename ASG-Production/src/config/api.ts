@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 
 export const getApiBaseUrl = (): string => {
-  if (typeof window === 'undefined') return 'http://31.58.59.223:4000';
+  if (typeof window === 'undefined') return 'https://asg.arrareload.com';
   
   const isCapacitorNative = 
     Capacitor.isNativePlatform() ||
@@ -12,7 +12,7 @@ export const getApiBaseUrl = (): string => {
     window.location.hostname === '127.0.0.1';
 
   if (isCapacitorNative) {
-    return 'http://31.58.59.223:4000';
+    return 'https://asg.arrareload.com';
   }
   
   return '';
