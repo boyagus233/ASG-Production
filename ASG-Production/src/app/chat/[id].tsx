@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, Image, Linking, ScrollView, Animated } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, Image, Linking, ScrollView, Animated, Alert } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -160,9 +160,36 @@ export default function ChatRoom() {
     // ⚡ REAL-TIME SOCKET LISTENERS
     socket.on('receive_message', (newMsg: any) => {
       setMessages((prev) => {
+        // If message with this real ID is already present, do nothing
         if (prev.some(m => m.id === newMsg.id)) return prev;
+
+        // If this matches our pending message via temp_id
+        if (newMsg.temp_id && prev.some(m => m.id === newMsg.temp_id || m.temp_id === newMsg.temp_id)) {
+          return prev.map(m => (m.id === newMsg.temp_id || m.temp_id === newMsg.temp_id) ? { ...newMsg, status: 'sent' } : m);
+        }
+
+        // Fallback matching if sender is current user and content matches
+        if (newMsg.sender_id === user?.id) {
+          const pendingIdx = prev.findIndex(m => m.status === 'pending' && m.content === newMsg.content);
+          if (pendingIdx !== -1) {
+            const updated = [...prev];
+            updated[pendingIdx] = { ...newMsg, status: 'sent' };
+            return updated;
+          }
+        }
+
         return [...prev, newMsg];
       });
+
+      // If we are currently active on this screen and someone else sent this message, mark it as read immediately
+      if (user?.id && newMsg.sender_id !== user?.id) {
+        authFetch(`${BASE_URL}/api/messages/${id}/read`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: user.id }),
+        }).catch(() => {});
+      }
+
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     });
 
@@ -185,8 +212,8 @@ export default function ChatRoom() {
     });
 
     socket.on('messages_read', (data: { groupId: number, user_id: number }) => {
-      if (data.groupId.toString() === id?.toString()) {
-        setMessages(prev => prev.map(m => ({ ...m, read_count: Number(m.read_count || 0) + 1 })));
+      if (data.groupId.toString() === id?.toString() && data.user_id !== user?.id) {
+        setMessages(prev => prev.map(m => m.sender_id === user?.id ? { ...m, read_count: Math.max(1, Number(m.read_count || 0) + 1) } : m));
       }
     });
 
@@ -488,6 +515,36 @@ export default function ChatRoom() {
     setMentionQuery(null);
   };
 
+  // ─── RETRY FAILED MESSAGE ───
+  const handleRetryMessage = async (msg: any) => {
+    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, status: 'pending' } : m));
+    try {
+      const res = await authFetch(`${BASE_URL}/api/messages/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sender_id: user.id, content: msg.content, payload: msg.payload, temp_id: msg.temp_id || msg.id }),
+      });
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        const serverMsg = json.data;
+        if (serverMsg) {
+          setMessages(prev => {
+            if (prev.some(m => m.id === serverMsg.id)) {
+              return prev.filter(m => m.id !== msg.id);
+            }
+            return prev.map(m => m.id === msg.id ? { ...serverMsg, status: 'sent' } : m);
+          });
+        }
+      } else {
+        setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, status: 'failed' } : m));
+        showToast('Gagal mengirim ulang pesan', 'error');
+      }
+    } catch {
+      setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, status: 'failed' } : m));
+      showToast('Gagal mengirim ulang pesan', 'error');
+    }
+  };
+
   // ─── SEND / EDIT TEXT MESSAGE ───
   const handleSendText = async () => {
     const text = inputText.trim();
@@ -540,17 +597,51 @@ export default function ChatRoom() {
       setReplyingToMessage(null);
     }
 
+    // 🕒 CREATE OPTIMISTIC PENDING MESSAGE (INSTANT FEEDBACK)
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const pendingMsg: any = {
+      id: tempId,
+      temp_id: tempId,
+      group_id: Number(id),
+      sender_id: user.id,
+      username: user.username,
+      nama_lengkap: user.nama_lengkap || user.username,
+      content: text,
+      attachment_url: null,
+      payload,
+      created_at: new Date().toISOString(),
+      read_count: 0,
+      reactions: [],
+      status: 'pending',
+    };
+
+    setMessages(prev => [...prev, pendingMsg]);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+
     try {
       const res = await authFetch(`${BASE_URL}/api/messages/${id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sender_id: user.id, content: text, payload }),
+        body: JSON.stringify({ sender_id: user.id, content: text, payload, temp_id: tempId }),
       });
-      if (!res.ok) {
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        const serverMsg = json.data;
+        if (serverMsg) {
+          setMessages(prev => {
+            if (prev.some(m => m.id === serverMsg.id)) {
+              return prev.filter(m => m.id !== tempId);
+            }
+            return prev.map(m => m.id === tempId ? { ...serverMsg, status: 'sent' } : m);
+          });
+        }
+      } else {
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'failed' } : m));
         const errData = await res.json().catch(() => ({}));
         showToast(errData.error || 'Gagal mengirim pesan', 'error');
       }
     } catch {
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'failed' } : m));
       showToast('Gagal mengirim pesan', 'error');
     }
   };
@@ -621,13 +712,49 @@ export default function ChatRoom() {
       setReplyingToMessage(null);
     }
 
+    const tempId = `temp_stk_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const pendingMsg: any = {
+      id: tempId,
+      temp_id: tempId,
+      group_id: Number(id),
+      sender_id: user?.id,
+      username: user?.username,
+      nama_lengkap: user?.nama_lengkap || user?.username,
+      content: `[STICKER:${stickerUrl}]`,
+      attachment_url: null,
+      payload,
+      created_at: new Date().toISOString(),
+      read_count: 0,
+      reactions: [],
+      status: 'pending',
+    };
+
+    setMessages(prev => [...prev, pendingMsg]);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+
     try {
-      await authFetch(`${BASE_URL}/api/messages/${id}`, {
+      const res = await authFetch(`${BASE_URL}/api/messages/${id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sender_id: user?.id, content: `[STICKER:${stickerUrl}]`, payload }),
+        body: JSON.stringify({ sender_id: user?.id, content: `[STICKER:${stickerUrl}]`, payload, temp_id: tempId }),
       });
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        const serverMsg = json.data;
+        if (serverMsg) {
+          setMessages(prev => {
+            if (prev.some(m => m.id === serverMsg.id)) {
+              return prev.filter(m => m.id !== tempId);
+            }
+            return prev.map(m => m.id === tempId ? { ...serverMsg, status: 'sent' } : m);
+          });
+        }
+      } else {
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'failed' } : m));
+        showToast('Gagal mengirim stiker', 'error');
+      }
     } catch {
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'failed' } : m));
       showToast('Gagal mengirim stiker', 'error');
     }
   };
@@ -1001,13 +1128,54 @@ export default function ChatRoom() {
         setReplyingToMessage(null);
       }
 
-      await authFetch(`${BASE_URL}/api/messages/${id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sender_id: user?.id, content, payload }),
-      });
-      showToast('Lokasi GPS berhasil dibagikan!', 'success');
-      setIsLoadingLocation(false);
+      const tempId = `temp_loc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const pendingMsg: any = {
+        id: tempId,
+        temp_id: tempId,
+        group_id: Number(id),
+        sender_id: user?.id,
+        username: user?.username,
+        nama_lengkap: user?.nama_lengkap || user?.username,
+        content,
+        attachment_url: null,
+        payload,
+        created_at: new Date().toISOString(),
+        read_count: 0,
+        reactions: [],
+        status: 'pending',
+      };
+
+      setMessages(prev => [...prev, pendingMsg]);
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+
+      try {
+        const res = await authFetch(`${BASE_URL}/api/messages/${id}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sender_id: user?.id, content, payload, temp_id: tempId }),
+        });
+        if (res.ok) {
+          const json = await res.json().catch(() => ({}));
+          const serverMsg = json.data;
+          if (serverMsg) {
+            setMessages(prev => {
+              if (prev.some(m => m.id === serverMsg.id)) {
+                return prev.filter(m => m.id !== tempId);
+              }
+              return prev.map(m => m.id === tempId ? { ...serverMsg, status: 'sent' } : m);
+            });
+          }
+          showToast('Lokasi GPS berhasil dibagikan!', 'success');
+        } else {
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'failed' } : m));
+          showToast('Gagal membagikan lokasi', 'error');
+        }
+      } catch {
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'failed' } : m));
+        showToast('Gagal membagikan lokasi', 'error');
+      } finally {
+        setIsLoadingLocation(false);
+      }
     };
 
     const getBrowserCoords = (highAccuracy: boolean, timeoutMs: number): Promise<{ latitude: number, longitude: number }> => {
@@ -1097,7 +1265,19 @@ export default function ChatRoom() {
 
         <TouchableOpacity
           activeOpacity={0.8}
-          onLongPress={() => { setSelectedMessage(item); setIsMsgOptionsVisible(true); }}
+          onPress={() => {
+            if (item.status === 'failed') {
+              Alert.alert('Pesan Gagal Dikirim', 'Apakah Anda ingin mengirim ulang pesan ini?', [
+                { text: 'Batal', style: 'cancel' },
+                { text: 'Kirim Ulang', onPress: () => handleRetryMessage(item) }
+              ]);
+            }
+          }}
+          onLongPress={() => {
+            if (item.status === 'pending') return;
+            setSelectedMessage(item);
+            setIsMsgOptionsVisible(true);
+          }}
         >
           <View style={[
             styles.messageBubble,
@@ -1213,12 +1393,28 @@ export default function ChatRoom() {
                 {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </Text>
               {isMe && (
-                <Ionicons
-                  name={Number(item.read_count || 0) > 0 ? "checkmark-done" : "checkmark"}
-                  size={15}
-                  color={Number(item.read_count || 0) > 0 ? "#64B5F6" : (isSticker ? "#999" : "rgba(249,246,240,0.6)")}
-                  style={{ marginLeft: 4 }}
-                />
+                item.status === 'pending' ? (
+                  <Ionicons
+                    name="time-outline"
+                    size={13}
+                    color={isSticker ? "#999" : "rgba(249,246,240,0.6)"}
+                    style={{ marginLeft: 4 }}
+                  />
+                ) : item.status === 'failed' ? (
+                  <Ionicons
+                    name="alert-circle"
+                    size={14}
+                    color="#EF5350"
+                    style={{ marginLeft: 4 }}
+                  />
+                ) : (
+                  <Ionicons
+                    name={Number(item.read_count || 0) > 0 ? "checkmark-done" : "checkmark"}
+                    size={15}
+                    color={Number(item.read_count || 0) > 0 ? "#64B5F6" : (isSticker ? "#999" : "rgba(249,246,240,0.6)")}
+                    style={{ marginLeft: 4 }}
+                  />
+                )
               )}
             </View>
           </View>

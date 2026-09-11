@@ -64,7 +64,7 @@ router.get('/:groupId', async (req, res) => {
 // 2. Kirim pesan ke grup (Real-time Socket.io)
 router.post('/:groupId', async (req, res) => {
   const { groupId } = req.params;
-  const { sender_id, content, attachment_url, payload } = req.body;
+  const { sender_id, content, attachment_url, payload, temp_id } = req.body;
 
   if (!sender_id || (!content && !attachment_url)) {
     return res.status(400).json({ error: 'Pesan tidak valid!' });
@@ -79,6 +79,8 @@ router.post('/:groupId', async (req, res) => {
     const result = await db.query(insertQuery, [groupId, sender_id, content || '', attachment_url || '', payloadJson]);
     const newMsg = result.rows[0];
     newMsg.reactions = [];
+    newMsg.read_count = 0;
+    if (temp_id) newMsg.temp_id = temp_id;
 
     // Ambil nama sender
     const userRes = await db.query('SELECT username, nama_lengkap FROM users WHERE id = $1', [sender_id]);
@@ -165,7 +167,7 @@ router.post('/:groupId', async (req, res) => {
 // 3. Upload File / Foto / Audio Voice Note
 router.post('/:groupId/upload', upload.single('file'), async (req, res) => {
   const { groupId } = req.params;
-  const { sender_id, payload } = req.body;
+  const { sender_id, payload, temp_id } = req.body;
 
   if (!req.file || !sender_id) {
     return res.status(400).json({ error: 'File dan sender_id wajib diisi!' });
@@ -182,6 +184,8 @@ router.post('/:groupId/upload', upload.single('file'), async (req, res) => {
     const result = await db.query(insertQuery, [groupId, sender_id, '', attachment_url, payloadJson]);
     const newMsg = result.rows[0];
     newMsg.reactions = [];
+    newMsg.read_count = 0;
+    if (temp_id) newMsg.temp_id = temp_id;
 
     const userRes = await db.query('SELECT username, nama_lengkap FROM users WHERE id = $1', [sender_id]);
     if (userRes.rows.length > 0) {
