@@ -27,10 +27,10 @@ router.post('/signup', async (req, res) => {
     const roleId = roleResult.rows[0].id;
 
     const insertQuery = `
-      INSERT INTO users (username, email, password, nama_lengkap, id_role, tanggal_lahir, jenis_kelamin)
-      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, username, email, id_role
+      INSERT INTO users (username, email, password, nama_lengkap, id_role, tanggal_lahir, jenis_kelamin, no_hp)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, username, email, id_role, no_hp, avatar_url
     `;
-    const result = await db.query(insertQuery, [username, email, hashedPassword, nama_lengkap || username, roleId, tanggal_lahir || null, jenis_kelamin || null]);
+    const result = await db.query(insertQuery, [username, email, hashedPassword, nama_lengkap || username, roleId, tanggal_lahir || null, jenis_kelamin || null, req.body.no_hp || null]);
 
     res.status(201).json({ message: 'User berhasil didaftarkan!', user: result.rows[0] });
   } catch (error) {
@@ -56,15 +56,7 @@ router.post('/login', async (req, res) => {
 
     const user = userResult.rows[0];
 
-    let isMatch = (password === user.password);
-    if (!isMatch) {
-      try {
-        isMatch = await bcrypt.compare(password, user.password);
-      } catch (e) {
-        isMatch = false;
-      }
-    }
-
+    const isMatch = await bcrypt.compare(password, user.password).catch(() => false);
     if (!isMatch) {
       return res.status(401).json({ error: 'Kredensial tidak valid!' });
     }
@@ -84,7 +76,9 @@ router.post('/login', async (req, res) => {
         username: user.username,
         email: user.email,
         nama_lengkap: user.nama_lengkap,
-        id_role: user.id_role
+        id_role: user.id_role,
+        no_hp: user.no_hp || '',
+        avatar_url: user.avatar_url || ''
       }
     });
 

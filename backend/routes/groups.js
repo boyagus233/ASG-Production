@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { authenticateToken } = require('../middleware/auth');
+
+// Wajib JWT Token untuk semua endpoint groups
+router.use(authenticateToken);
 
 // Helper untuk Audit Log
 const logAudit = async (action, userId, details) => {
@@ -44,12 +48,12 @@ const createNotification = async (req, userId, title, body) => {
 
 // 1. Buat Grup Baru + Buat Undangan Job (Status PENDING)
 router.post('/', async (req, res) => {
-  const { name, owner_id, member_ids } = req.body;
+  const { name, owner_id, member_ids, event_date, call_time, show_time, venue_address, dresscode, rundown_notes } = req.body;
   if (!name || !owner_id) return res.status(400).json({ error: 'Nama grup dan owner_id wajib diisi!' });
 
   try {
-    const insertGroup = 'INSERT INTO groups (name, owner_id) VALUES ($1, $2) RETURNING *';
-    const groupResult = await db.query(insertGroup, [name, owner_id]);
+    const insertGroup = 'INSERT INTO groups (name, owner_id, event_date, call_time, show_time, venue_address, dresscode, rundown_notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *';
+    const groupResult = await db.query(insertGroup, [name, owner_id, event_date || null, call_time || null, show_time || null, venue_address || null, dresscode || null, rundown_notes || null]);
     const newGroup = groupResult.rows[0];
 
     // Tambahkan owner sebagai member utama grup
@@ -174,9 +178,11 @@ router.delete('/:id', async (req, res) => {
 // 4. Ambil Anggota Grup Aktif
 router.get('/:id/members', async (req, res) => {
   const { id } = req.params;
+  const isAdmin = req.user && req.user.role === 1;
   try {
     const query = `
-      SELECT u.id, u.username, u.nama_lengkap, u.email, r.role_name
+      SELECT u.id, u.username, u.nama_lengkap, u.avatar_url, u.no_hp, r.role_name
+      ${isAdmin ? ', u.email' : ''}
       FROM group_members gm
       JOIN users u ON gm.user_id = u.id
       LEFT JOIN roles r ON u.id_role = r.id
@@ -240,19 +246,14 @@ router.post('/invitations/:invitationId/respond', async (req, res) => {
       await db.query('UPDATE job_invitations SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', ['ACCEPTED', invitationId]);
       await db.query('INSERT INTO group_members (group_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [invitation.group_id, userId]);
 
-      const pendingCheck = await db.query(
-        "SELECT COUNT(*) FROM job_invitations WHERE group_id = $1 AND status = 'PENDING'",
-        [invitation.group_id]
+      await createNotification(
+        req,
+        invitation.owner_id,
+        'Anggota Menerima Job! ✅',
+        `"${userName}" telah menyetujui tawaran job "${invitation.group_name}".`
       );
-      
-      if (parseInt(pendingCheck.rows[0].count) === 0) {
-        await createNotification(
-          req,
-          invitation.owner_id,
-          'Semua Member Sudah Masuk! 🎉',
-          `Seluruh anggota yang diundang telah menyetujui job "${invitation.group_name}".`
-        );
-      }
+
+      await logAudit('ACCEPT_JOB', userId, `Menerima undangan job: ${invitation.group_name}`);
 
       if (req.io) {
         req.io.emit('update_groups');
@@ -271,6 +272,8 @@ router.post('/invitations/:invitationId/respond', async (req, res) => {
         'Anggota Menolak Job! ⚠️',
         `"${userName}" tidak bisa mengikuti job "${invitation.group_name}".`
       );
+
+      await logAudit('REJECT_JOB', userId, `Menolak undangan job: ${invitation.group_name}`);
 
       if (req.io) {
         req.io.emit('update_invitations');
@@ -295,28 +298,300 @@ router.get('/dashboard-stats', async (req, res) => {
     const completedJobsQuery = 'SELECT COUNT(*) FROM group_history';
     const totalMembersQuery = 'SELECT COUNT(*) FROM users';
 
-    const historyQuery = `
-      SELECT gh.*, u.nama_lengkap as owner_name
-      FROM group_history gh
-      LEFT JOIN users u ON gh.owner_id = u.id
-      ORDER BY gh.completed_at DESC
-    `;
-
-    const [activeRes, completedRes, membersRes, historyRes] = await Promise.all([
+    const [activeRes, completedRes, membersRes] = await Promise.all([
       db.query(activeJobsQuery),
       db.query(completedJobsQuery),
-      db.query(totalMembersQuery),
-      db.query(historyQuery)
+      db.query(totalMembersQuery)
     ]);
 
     res.json({
       activeJobsCount: parseInt(activeRes.rows[0].count),
       completedJobsCount: parseInt(completedRes.rows[0].count),
-      totalMembersCount: parseInt(membersRes.rows[0].count),
-      history: historyRes.rows
+      totalMembersCount: parseInt(membersRes.rows[0].count)
     });
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
+
+// Endpoint untuk Riwayat Aktivitas (Paginated Audit Logs with Search & Filter)
+router.get('/audit-logs', async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const search = (req.query.search || '').trim();
+  const actionFilter = (req.query.action || '').trim();
+  const offset = (page - 1) * limit;
+
+  try {
+    let whereConditions = [];
+    let queryParams = [];
+    let paramIndex = 1;
+
+    if (search) {
+      whereConditions.push(`(a.details ILIKE $${paramIndex} OR u.nama_lengkap ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex})`);
+      queryParams.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    if (actionFilter && actionFilter !== 'ALL') {
+      whereConditions.push(`a.action = $${paramIndex}`);
+      queryParams.push(actionFilter);
+      paramIndex++;
+    }
+
+    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+
+    const dataQuery = `
+      SELECT a.*, u.nama_lengkap, u.username
+      FROM audit_logs a
+      LEFT JOIN users u ON a.user_id = u.id
+      ${whereClause}
+      ORDER BY a.created_at DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*)
+      FROM audit_logs a
+      LEFT JOIN users u ON a.user_id = u.id
+      ${whereClause}
+    `;
+
+    const [result, countRes] = await Promise.all([
+      db.query(dataQuery, [...queryParams, limit, offset]),
+      db.query(countQuery, queryParams)
+    ]);
+
+    const totalCount = parseInt(countRes.rows[0].count);
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+
+    res.json({
+      data: result.rows,
+      totalCount,
+      totalPages,
+      page,
+      limit,
+      hasMore: offset + limit < totalCount
+    });
+  } catch (error) {
+    console.error('Error fetching audit logs:', error);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
+
+// 8. Export Laporan Job (Excel)
+const ExcelJS = require('exceljs');
+
+router.get('/export-report', async (req, res) => {
+  try {
+    const workbook = new ExcelJS.Workbook();
+    
+    // Sheet 1: Job Selesai
+    const sheet1 = workbook.addWorksheet('Riwayat Job Selesai');
+    sheet1.columns = [
+      { header: 'ID', key: 'id', width: 5 },
+      { header: 'Nama Job', key: 'name', width: 30 },
+      { header: 'Jumlah Member', key: 'member_count', width: 15 },
+      { header: 'Tanggal Dibuat', key: 'created_at', width: 25 },
+      { header: 'Tanggal Selesai', key: 'completed_at', width: 25 },
+    ];
+    
+    const historyRes = await db.query('SELECT * FROM group_history ORDER BY completed_at DESC');
+    historyRes.rows.forEach(row => {
+      sheet1.addRow({
+        id: row.id,
+        name: row.name,
+        member_count: row.member_count,
+        created_at: new Date(row.created_at).toLocaleString(),
+        completed_at: new Date(row.completed_at).toLocaleString()
+      });
+    });
+
+    // Sheet 2: Audit Logs
+    const sheet2 = workbook.addWorksheet('Aktivitas Member (Absensi)');
+    sheet2.columns = [
+      { header: 'Tipe', key: 'action', width: 15 },
+      { header: 'Nama Member', key: 'nama_lengkap', width: 25 },
+      { header: 'Detail', key: 'details', width: 50 },
+      { header: 'Tanggal', key: 'created_at', width: 25 },
+    ];
+
+    const auditRes = await db.query(`
+      SELECT a.action, a.details, a.created_at, u.nama_lengkap 
+      FROM audit_logs a 
+      LEFT JOIN users u ON a.user_id = u.id 
+      WHERE a.action IN ('ACCEPT_JOB', 'REJECT_JOB')
+      ORDER BY a.created_at DESC
+    `);
+    
+    auditRes.rows.forEach(row => {
+      sheet2.addRow({
+        action: row.action,
+        nama_lengkap: row.nama_lengkap || 'Unknown',
+        details: row.details,
+        created_at: new Date(row.created_at).toLocaleString()
+      });
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=Laporan_Job_ASG.xlsx');
+    
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error('Error exporting report:', error);
+    res.status(500).json({ error: 'Gagal export laporan excel' });
+  }
+});
+
+// 9. Ambil Detail Satu Grup
+router.get('/:id/detail', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const query = `
+      SELECT g.*, 
+        (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
+      FROM groups g
+      WHERE g.id = $1
+    `;
+    const result = await db.query(query, [id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Grup tidak ditemukan!' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching group detail:', error);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
+
+// 10. Update Briefing & Rundown Job (Admin / Owner)
+router.put('/:id/briefing', async (req, res) => {
+  const { id } = req.params;
+  const { call_time, show_time, venue_address, dresscode, rundown_notes, event_date } = req.body;
+  try {
+    const result = await db.query(`
+      UPDATE groups 
+      SET call_time = $1, show_time = $2, venue_address = $3, dresscode = $4, rundown_notes = $5, event_date = COALESCE($6, event_date)
+      WHERE id = $7 RETURNING *
+    `, [call_time || null, show_time || null, venue_address || null, dresscode || null, rundown_notes || null, event_date || null, id]);
+
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Grup tidak ditemukan!' });
+
+    if (req.io) {
+      req.io.to(`group_${id}`).emit('update_group_briefing', result.rows[0]);
+      req.io.emit('update_groups');
+    }
+
+    res.json({ message: 'Briefing job berhasil diperbarui!', group: result.rows[0] });
+  } catch (error) {
+    console.error('Error updating briefing:', error);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
+
+// 11. Checklist Inventaris Alat & Kostum
+router.get('/:id/checklist', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const query = `
+      SELECT c.*, u.nama_lengkap as checked_by_name
+      FROM job_checklists c
+      LEFT JOIN users u ON c.checked_by = u.id
+      WHERE c.group_id = $1
+      ORDER BY c.category ASC, c.id ASC
+    `;
+    const result = await db.query(query, [id]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching checklist:', error);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
+
+router.post('/:id/checklist', async (req, res) => {
+  const { id } = req.params;
+  const { item_name, category } = req.body;
+  if (!item_name) return res.status(400).json({ error: 'Nama perlengkapan wajib diisi!' });
+
+  try {
+    const result = await db.query(
+      'INSERT INTO job_checklists (group_id, item_name, category) VALUES ($1, $2, $3) RETURNING *',
+      [id, item_name.trim(), category || 'ALAT']
+    );
+    const item = result.rows[0];
+
+    if (req.io) {
+      req.io.to(`group_${id}`).emit('checklist_updated', { groupId: id });
+    }
+
+    res.status(201).json({ message: 'Item berhasil ditambahkan!', item });
+  } catch (error) {
+    console.error('Error adding checklist item:', error);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
+
+router.put('/:id/checklist/:itemId/toggle', async (req, res) => {
+  const { id, itemId } = req.params;
+  const { userId } = req.body;
+
+  try {
+    const check = await db.query('SELECT is_checked FROM job_checklists WHERE id = $1 AND group_id = $2', [itemId, id]);
+    if (check.rows.length === 0) return res.status(404).json({ error: 'Item checklist tidak ditemukan!' });
+
+    const newStatus = !check.rows[0].is_checked;
+    const checkedBy = newStatus ? (userId || null) : null;
+
+    const result = await db.query(`
+      UPDATE job_checklists 
+      SET is_checked = $1, checked_by = $2, updated_at = NOW() 
+      WHERE id = $3 AND group_id = $4 
+      RETURNING *
+    `, [newStatus, checkedBy, itemId, id]);
+
+    if (req.io) {
+      req.io.to(`group_${id}`).emit('checklist_updated', { groupId: id });
+    }
+
+    res.json({ message: 'Status checklist berhasil diubah!', item: result.rows[0] });
+  } catch (error) {
+    console.error('Error toggling checklist item:', error);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
+
+router.delete('/:id/checklist/:itemId', async (req, res) => {
+  const { id, itemId } = req.params;
+  try {
+    const result = await db.query('DELETE FROM job_checklists WHERE id = $1 AND group_id = $2 RETURNING id', [itemId, id]);
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Item tidak ditemukan!' });
+
+    if (req.io) {
+      req.io.to(`group_${id}`).emit('checklist_updated', { groupId: id });
+    }
+
+    res.json({ message: 'Item checklist berhasil dihapus!' });
+  } catch (error) {
+    console.error('Error deleting checklist item:', error);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
+
+// 12. Galeri Media & Dokumen Grup
+router.get('/:id/media', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const query = `
+      SELECT m.id, m.content, m.attachment_url, m.created_at, m.sender_id, u.nama_lengkap as sender_name
+      FROM messages m
+      LEFT JOIN users u ON m.sender_id = u.id
+      WHERE m.group_id = $1 AND m.attachment_url IS NOT NULL AND m.attachment_url != ''
+      ORDER BY m.created_at DESC
+    `;
+    const result = await db.query(query, [id]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching group media:', error);
     res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
   }
 });

@@ -12,6 +12,7 @@ export default function SignUp() {
   const [password, setPassword] = useState('');
   const [tanggalLahir, setTanggalLahir] = useState('');
   const [jenisKelamin, setJenisKelamin] = useState('Laki-laki');
+  const [noHp, setNoHp] = useState('');
   const [toast, setToast] = useState({ visible: false, message: '', type: 'info' as ToastType });
 
   const showToast = (message: string, type: ToastType) => {
@@ -36,7 +37,8 @@ export default function SignUp() {
           password, 
           nama_lengkap: namaLengkap, 
           tanggal_lahir: tanggalLahir || null, 
-          jenis_kelamin: jenisKelamin 
+          jenis_kelamin: jenisKelamin,
+          no_hp: noHp,
         }),
       });
       
@@ -85,6 +87,9 @@ export default function SignUp() {
               <Text style={styles.label}>Password</Text>
               <TextInput style={styles.input} placeholder="Minimal 6 karakter" placeholderTextColor="#888" secureTextEntry value={password} onChangeText={setPassword} />
               
+              <Text style={styles.label}>Nomor WhatsApp / Telepon</Text>
+              <TextInput style={styles.input} placeholder="Contoh: 081234567890" placeholderTextColor="#888" value={noHp} onChangeText={setNoHp} keyboardType="phone-pad" />
+
               <Text style={styles.label}>Tanggal Lahir (YYYY-MM-DD)</Text>
               <TextInput style={styles.input} placeholder="Contoh: 2000-12-31" placeholderTextColor="#888" value={tanggalLahir} onChangeText={setTanggalLahir} />
               

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, 
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Toast, ToastType } from '../../components/Toast';
-import { API_BASE_URL } from '../../config/api';
+import { API_BASE_URL, authFetch } from '../../config/api';
 
 export default function MasterRole() {
   const [roles, setRoles] = useState<any[]>([]);
@@ -23,9 +23,9 @@ export default function MasterRole() {
 
   const fetchRoles = async () => {
     try {
-      const res = await fetch(API_URL);
+      const res = await authFetch(API_URL);
       const data = await res.json();
-      setRoles(data);
+      setRoles(Array.isArray(data) ? data : []);
     } catch (error) {
       showToast('Gagal memuat data role.', 'error');
     } finally {
@@ -64,7 +64,7 @@ export default function MasterRole() {
 
   const executeDelete = async (id: string) => {
     try {
-      const res = await fetch(`${API_URL}/${id}`, { method: 'DELETE' });
+      const res = await authFetch(`${API_URL}/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) {
         showToast(data.error || 'Gagal menghapus role.', 'error');
@@ -87,7 +87,7 @@ export default function MasterRole() {
       const url = editingId ? `${API_URL}/${editingId}` : API_URL;
       const method = editingId ? 'PUT' : 'POST';
       
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role_name: roleName }),

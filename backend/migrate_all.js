@@ -77,6 +77,7 @@ async function migrateAll() {
         sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         content TEXT,
         attachment_url TEXT,
+        payload TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);

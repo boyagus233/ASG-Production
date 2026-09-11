@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, Alert, Platform, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, Alert, Platform, ScrollView, Image, Linking } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
 import { Toast, ToastType } from '../../components/Toast';
-import { API_BASE_URL } from '../../config/api';
+import { API_BASE_URL, authFetch, getFileUrl } from '../../config/api';
 
 export default function MasterUser() {
   const [users, setUsers] = useState<any[]>([]);
@@ -19,6 +19,7 @@ export default function MasterUser() {
   const [username, setUsername] = useState('');
   const [namaLengkap, setNamaLengkap] = useState('');
   const [email, setEmail] = useState('');
+  const [noHp, setNoHp] = useState('');
   const [password, setPassword] = useState('');
   const [tanggalLahir, setTanggalLahir] = useState('');
   const [jenisKelamin, setJenisKelamin] = useState('Laki-laki');
@@ -36,17 +37,29 @@ export default function MasterUser() {
     return new Date(dateString).toISOString().split('T')[0];
   };
 
+  const openWhatsApp = (phone?: string | null) => {
+    if (!phone) return;
+    let cleaned = phone.replace(/[^0-9]/g, '');
+    if (cleaned.startsWith('0')) cleaned = '62' + cleaned.slice(1);
+    if (!cleaned.startsWith('62')) cleaned = '62' + cleaned;
+    if (Platform.OS === 'web') {
+      window.open(`https://wa.me/${cleaned}`, '_blank');
+    } else {
+      Linking.openURL(`https://wa.me/${cleaned}`);
+    }
+  };
+
   const fetchData = async () => {
     try {
       const [usersRes, rolesRes] = await Promise.all([
-        fetch(API_URL),
-        fetch(ROLE_API_URL)
+        authFetch(API_URL),
+        authFetch(ROLE_API_URL)
       ]);
       const usersData = await usersRes.json();
       const rolesData = await rolesRes.json();
       
-      setUsers(usersData);
-      setRoles(rolesData);
+      setUsers(Array.isArray(usersData) ? usersData : []);
+      setRoles(Array.isArray(rolesData) ? rolesData : []);
     } catch (error) {
       showToast('Gagal memuat data.', 'error');
     } finally {
@@ -63,6 +76,7 @@ export default function MasterUser() {
     setUsername('');
     setNamaLengkap('');
     setEmail('');
+    setNoHp('');
     setPassword('');
     setTanggalLahir('');
     setJenisKelamin('Laki-laki');
@@ -75,6 +89,7 @@ export default function MasterUser() {
     setUsername(item.username || '');
     setNamaLengkap(item.nama_lengkap || item.username || '');
     setEmail(item.email || '');
+    setNoHp(item.no_hp || '');
     setTanggalLahir(formatDate(item.tanggal_lahir) || '');
     setJenisKelamin(item.jenis_kelamin || 'Laki-laki');
     setRoleId(item.id_role ? item.id_role.toString() : '2');
@@ -97,7 +112,7 @@ export default function MasterUser() {
 
   const executeDelete = async (id: string) => {
     try {
-      const res = await fetch(`${API_URL}/${id}`, { method: 'DELETE' });
+      const res = await authFetch(`${API_URL}/${id}`, { method: 'DELETE' });
       if (!res.ok) {
         showToast('Gagal menghapus user.', 'error');
         return;
@@ -128,13 +143,14 @@ export default function MasterUser() {
         username, 
         email, 
         nama_lengkap: namaLengkap, 
+        no_hp: noHp.trim() || null,
         tanggal_lahir: tanggalLahir || null,
         jenis_kelamin: jenisKelamin,
         id_role: parseInt(roleId) 
       };
       if (password) payload.password = password;
 
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -156,22 +172,54 @@ export default function MasterUser() {
   const renderItem = ({ item }: { item: any }) => (
     <View style={styles.userCard}>
       <View style={styles.avatarBox}>
-        <Text style={styles.avatarText}>{item.username.charAt(0).toUpperCase()}</Text>
+        {item.avatar_url ? (
+          <Image source={{ uri: getFileUrl(item.avatar_url) }} style={styles.avatarImg} />
+        ) : (
+          <Text style={styles.avatarText}>{item.username.charAt(0).toUpperCase()}</Text>
+        )}
       </View>
       <View style={styles.userInfo}>
         <Text style={styles.userName} numberOfLines={1}>{item.nama_lengkap || item.username}</Text>
-        <Text style={styles.userEmail} numberOfLines={1}>{item.email}</Text>
-        <Text style={styles.userEmail} numberOfLines={1}>{item.jenis_kelamin || '-'} • {formatDate(item.tanggal_lahir) || '-'}</Text>
+        <Text style={styles.userEmail} numberOfLines={1}>{item.email || '-'}</Text>
+        
+        {/* Nomor WhatsApp / Telepon */}
+        {item.no_hp ? (
+          <TouchableOpacity 
+            style={styles.phoneBadge} 
+            onPress={() => openWhatsApp(item.no_hp)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="logo-whatsapp" size={13} color="#25D366" />
+            <Text style={styles.phoneText}>{item.no_hp}</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.noPhoneBadge}>
+            <Ionicons name="call-outline" size={12} color="#999" />
+            <Text style={styles.noPhoneText}>Belum ada nomor HP</Text>
+          </View>
+        )}
+
+        <Text style={styles.userSubText} numberOfLines={1}>
+          {item.jenis_kelamin || '-'} • {formatDate(item.tanggal_lahir) || '-'}
+        </Text>
         <View style={styles.badge}>
           <Text style={styles.badgeText}>{item.role_name}</Text>
         </View>
       </View>
       <View style={styles.actionButtons}>
+        {item.no_hp ? (
+          <TouchableOpacity 
+            style={[styles.actionBtn, styles.waActionBtn]} 
+            onPress={() => openWhatsApp(item.no_hp)}
+          >
+            <Ionicons name="logo-whatsapp" size={18} color="#25D366" />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity style={styles.actionBtn} onPress={() => handleEditClick(item)}>
-          <Ionicons name="pencil" size={20} color="#3498db" />
+          <Ionicons name="pencil" size={18} color="#3498db" />
         </TouchableOpacity>
         <TouchableOpacity style={styles.actionBtn} onPress={() => handleDeleteClick(item.id)}>
-          <Ionicons name="trash" size={20} color="#e74c3c" />
+          <Ionicons name="trash" size={18} color="#e74c3c" />
         </TouchableOpacity>
       </View>
     </View>
@@ -202,8 +250,18 @@ export default function MasterUser() {
           <TextInput style={styles.input} placeholder="Masukkan nama lengkap" placeholderTextColor="#999" value={namaLengkap} onChangeText={setNamaLengkap} />
 
           <Text style={styles.label}>Email:</Text>
-          <TextInput style={styles.input} placeholder="Masukkan email" placeholderTextColor="#999" value={email} onChangeText={setEmail} autoCapitalize="none" />
+          <TextInput style={styles.input} placeholder="Masukkan email" placeholderTextColor="#999" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
           
+          <Text style={styles.label}>Nomor WhatsApp / Telepon:</Text>
+          <TextInput 
+            style={styles.input} 
+            placeholder="Contoh: 081234567890" 
+            placeholderTextColor="#999" 
+            value={noHp} 
+            onChangeText={setNoHp} 
+            keyboardType="phone-pad" 
+          />
+
           <Text style={styles.label}>Password:</Text>
           <TextInput style={styles.input} placeholder={editingId ? "Kosongkan jika tidak diubah" : "Masukkan password"} placeholderTextColor="#999" secureTextEntry value={password} onChangeText={setPassword} />
           
@@ -289,15 +347,42 @@ const styles = StyleSheet.create({
     padding: 16, borderRadius: 16, borderWidth: 1, borderColor: '#E0D8C8',
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2
   },
-  avatarBox: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#F1EBE1', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  avatarBox: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#F1EBE1', justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden' },
+  avatarImg: { width: 50, height: 50, borderRadius: 25 },
   avatarText: { fontSize: 20, fontWeight: 'bold', color: '#1A1A1A' },
   userInfo: { flex: 1, marginRight: 8 },
   userName: { fontSize: 16, fontWeight: 'bold', color: '#1A1A1A', marginBottom: 2 },
-  userEmail: { fontSize: 12, color: '#666', marginBottom: 4 },
+  userEmail: { fontSize: 12, color: '#666', marginBottom: 3 },
+  phoneBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    marginBottom: 4,
+  },
+  phoneText: { fontSize: 12, color: '#2E7D32', fontWeight: 'bold' },
+  noPhoneBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F5F5F5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+    marginBottom: 4,
+  },
+  noPhoneText: { fontSize: 11, color: '#999', fontStyle: 'italic' },
+  userSubText: { fontSize: 11, color: '#888', marginTop: 2 },
   badge: { alignSelf: 'flex-start', backgroundColor: '#E8F5E9', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginTop: 4 },
   badgeText: { fontSize: 10, color: '#2E7D32', fontWeight: 'bold' },
-  actionButtons: { flexDirection: 'row', gap: 8 },
+  actionButtons: { flexDirection: 'row', gap: 6, alignItems: 'center' },
   actionBtn: { padding: 8, backgroundColor: '#F9F6F0', borderRadius: 8, borderWidth: 1, borderColor: '#E0D8C8' },
+  waActionBtn: { backgroundColor: '#E8F5E9', borderColor: '#C8E6C9' },
 
   formContainer: { backgroundColor: '#F1EBE1', padding: 24, flex: 1 },
   formTitle: { fontSize: 18, fontWeight: 'bold', color: '#1A1A1A', marginBottom: 16 },

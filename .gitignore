@@ -18,10 +18,12 @@ android/app/build/
 android/.gradle/
 android/.idea/
 
-# Environment files
+# Environment & Secrets
 .env
 .env.local
 *.env
+backend/firebase-admin.json
+firebase-admin.json
 
 # Uploads
 backend/uploads/*

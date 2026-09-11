@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ASG God Mode Monitor</title>
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --text: #c9d1d9;
+      --green: #2ea043;
+      --red: #f85149;
+      --blue: #58a6ff;
+      --border: #30363d;
+    }
+    body {
+      margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background-color: var(--bg); color: var(--text);
+    }
+    #login-screen {
+      display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;
+    }
+    .box {
+      background: var(--panel); border: 1px solid var(--border); padding: 30px; border-radius: 8px; width: 300px;
+    }
+    h2 { margin-top: 0; color: #fff; text-align: center; }
+    input { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; box-sizing: border-box; }
+    button { width: 100%; padding: 10px; background: var(--green); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+    button:hover { background: #2c974b; }
+    
+    #dashboard { display: none; padding: 20px; height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px; }
+    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+    .metrics { display: flex; gap: 20px; }
+    .metric-card { background: var(--panel); border: 1px solid var(--border); padding: 15px; border-radius: 8px; flex: 1; text-align: center; }
+    .metric-value { font-size: 24px; font-weight: bold; color: var(--blue); margin-top: 10px; }
+    
+    .panels { display: flex; gap: 20px; flex: 1; min-height: 0; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .panel-header { background: var(--border); padding: 10px 15px; font-weight: bold; color: #fff; display: flex; justify-content: space-between; }
+    .panel-content { padding: 10px; overflow-y: auto; flex: 1; font-family: monospace; font-size: 13px; }
+    
+    .log-line { margin-bottom: 4px; border-bottom: 1px solid #222; padding-bottom: 4px; }
+    .log-method { color: var(--green); font-weight: bold; }
+    
+    .chat-msg { background: rgba(88, 166, 255, 0.1); border-left: 3px solid var(--blue); padding: 8px 12px; margin-bottom: 8px; border-radius: 4px; }
+    .chat-meta { font-size: 11px; color: #8b949e; margin-bottom: 4px; }
+    .chat-group { color: var(--green); font-weight: bold; }
+    .chat-sender { color: var(--blue); font-weight: bold; }
+    
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+  <div id="login-screen">
+    <div class="box">
+      <h2>👁️ GOD MODE</h2>
+      <form onsubmit="event.preventDefault(); login();">
+        <input type="text" id="username" placeholder="Username" />
+        <input type="password" id="password" placeholder="Password" />
+        <button type="submit">Enter System</button>
+      </form>
+      <div id="login-error" style="color: var(--red); margin-top: 10px; text-align: center; display: none;">Access Denied</div>
+    </div>
+  </div>
+
+  <div id="dashboard" style="display: none;">
+    <div class="header">
+      <h2>👁️ ASG Monitor Dashboard</h2>
+      <div style="display: flex; gap: 15px; align-items: center;">
+        <a href="/ASG-Production-v4.apk" download style="background: var(--blue); color: #fff; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">📥 Download APK</a>
+        <div>Status: <span id="conn-status" style="color: var(--red);">Disconnected</span></div>
+      </div>
+    </div>
+
+    <div class="metrics">
+      <div class="metric-card">
+        <div>CPU Load</div>
+        <div class="metric-value" id="cpu-val">0%</div>
+      </div>
+      <div class="metric-card">
+        <div>RAM Usage</div>
+        <div class="metric-value" id="ram-val">0 MB / 0 MB</div>
+      </div>
+      <div class="metric-card">
+        <div>Server Uptime</div>
+        <div class="metric-value" id="uptime-val">0h 0m</div>
+      </div>
+    </div>
+
+    <div class="panels">
+      <div class="panel">
+        <div class="panel-header">
+          <span>Live API Traffic</span>
+          <span style="color: var(--green)">● REC</span>
+        </div>
+        <div class="panel-content" id="api-logs"></div>
+      </div>
+      
+      <div class="panel">
+        <div class="panel-header">
+          <span>God-Mode Chat Snooper</span>
+          <span style="color: var(--blue)">● LIVE</span>
+        </div>
+        <div class="panel-content" id="chat-logs"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let socket;
+    let token = localStorage.getItem('god_mode_token');
+
+    if (token) {
+      showDashboard();
+      connectSocket();
+    }
+
+    async function login() {
+      try {
+        const u = document.getElementById('username').value;
+        const p = document.getElementById('password').value;
+        
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, password: p })
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          token = data.token;
+          localStorage.setItem('god_mode_token', token);
+          showDashboard();
+          connectSocket();
+        } else {
+          document.getElementById('login-error').style.display = 'block';
+          alert('Login failed: ' + res.status);
+        }
+      } catch (e) {
+        alert('Fetch Error: ' + e.message);
+      }
+    }
+
+    function showDashboard() {
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'flex';
+    }
+
+    function connectSocket() {
+      // Connect to the main server for sockets (Port 3000)
+      const socketUrl = window.location.protocol + '//' + window.location.hostname + ':3000';
+      socket = io(socketUrl);
+
+      socket.on('connect', () => {
+        document.getElementById('conn-status').innerText = 'Connected';
+        document.getElementById('conn-status').style.color = 'var(--green)';
+        socket.emit('join_god_mode', token);
+      });
+
+      socket.on('disconnect', () => {
+        document.getElementById('conn-status').innerText = 'Disconnected';
+        document.getElementById('conn-status').style.color = 'var(--red)';
+      });
+
+      // Handle Metrics
+      socket.on('os_metrics', (data) => {
+        document.getElementById('cpu-val').innerText = `${data.cpu_usage}%`;
+        const mbUsed = (data.memory_used / 1024 / 1024).toFixed(0);
+        const mbTotal = (data.memory_total / 1024 / 1024).toFixed(0);
+        document.getElementById('ram-val').innerText = `${mbUsed} MB / ${mbTotal} MB`;
+        
+        const h = Math.floor(data.uptime / 3600);
+        const m = Math.floor((data.uptime % 3600) / 60);
+        document.getElementById('uptime-val').innerText = `${h}h ${m}m`;
+      });
+
+      // Handle API Logs
+      const apiBox = document.getElementById('api-logs');
+      
+      socket.on('api_log_history', (history) => {
+        apiBox.innerHTML = ''; // Clear existing
+        history.forEach(data => {
+          const div = document.createElement('div');
+          div.className = 'log-line';
+          const time = new Date(data.timestamp).toLocaleTimeString();
+          div.innerHTML = `<span style="color:#8b949e">[${time}]</span> <span class="log-method">${data.method}</span> ${data.url}`;
+          apiBox.prepend(div);
+        });
+      });
+
+      socket.on('api_log', (data) => {
+        const div = document.createElement('div');
+        div.className = 'log-line';
+        const time = new Date(data.timestamp).toLocaleTimeString();
+        div.innerHTML = `<span style="color:#8b949e">[${time}]</span> <span class="log-method">${data.method}</span> ${data.url}`;
+        apiBox.prepend(div);
+        if (apiBox.children.length > 100) apiBox.lastChild.remove();
+      });
+
+      // Handle Chat Snooper
+      const chatBox = document.getElementById('chat-logs');
+      
+      socket.on('chat_log_history', (history) => {
+        chatBox.innerHTML = '';
+        history.forEach(data => {
+          const div = document.createElement('div');
+          div.className = 'chat-msg';
+          const msg = data.message;
+          const time = new Date(msg.created_at || Date.now()).toLocaleTimeString();
+          const sender = msg.nama_lengkap || msg.username || 'Unknown';
+          
+          div.innerHTML = `
+            <div class="chat-meta">
+              [${time}] GROUP: <span class="chat-group">${data.groupName}</span>
+            </div>
+            <div><span class="chat-sender">${sender}:</span> ${msg.content || '[File/Audio/Sticker]'}</div>
+          `;
+          chatBox.prepend(div);
+        });
+      });
+
+      socket.on('god_mode_chat', (data) => {
+        const div = document.createElement('div');
+        div.className = 'chat-msg';
+        const msg = data.message;
+        const time = new Date(msg.created_at || Date.now()).toLocaleTimeString();
+        const sender = msg.nama_lengkap || msg.username || 'Unknown';
+        
+        div.innerHTML = `
+          <div class="chat-meta">
+            [${time}] GROUP: <span class="chat-group">${data.groupName}</span>
+          </div>
+          <div><span class="chat-sender">${sender}:</span> ${msg.content || '[File/Audio/Sticker]'}</div>
+        `;
+        chatBox.prepend(div);
+        if (chatBox.children.length > 100) chatBox.lastChild.remove();
+      });
+    }
+  </script>
+</body>
+</html>

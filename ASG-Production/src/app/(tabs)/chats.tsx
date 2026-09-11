@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Platform, TextInput, Alert, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Platform, TextInput, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Capacitor } from '@capacitor/core';
 import { router, useFocusEffect } from 'expo-router';
 import { Toast, ToastType } from '../../components/Toast';
-import { API_BASE_URL } from '../../config/api';
+import { API_BASE_URL, authFetch } from '../../config/api';
 import { socket } from '../../services/socket';
 
 export default function ChatsScreen() {
@@ -12,12 +13,23 @@ export default function ChatsScreen() {
   const [groups, setGroups] = useState<any[]>([]);
   const [invitations, setInvitations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [toast, setToast] = useState({ visible: false, message: '', type: 'info' as ToastType });
+
+  // Search Filter
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Modal State Pembuatan Grup
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [groupDate, setGroupDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [groupLocation, setGroupLocation] = useState('LOK Tanggerang');
+
+  // Briefing & Rundown Inputs
+  const [callTime, setCallTime] = useState('');
+  const [showTime, setShowTime] = useState('');
+  const [venueAddress, setVenueAddress] = useState('');
+  const [dresscode, setDresscode] = useState('');
+  const [rundownNotes, setRundownNotes] = useState('');
 
   // Pipeline Filter Pemilihan Anggota (Role -> Member -> Add List)
   const [roles, setRoles] = useState<any[]>([]);
@@ -25,21 +37,6 @@ export default function ChatsScreen() {
   const [selectedRole, setSelectedRole] = useState<string>('ALL');
   const [selectedMemberId, setSelectedMemberId] = useState<string>('');
   const [selectedMembers, setSelectedMembers] = useState<any[]>([]);
-
-  // ─── FITUR AUTO-SYNC ROLE (MIND-BLOWING MAGIC AUTO-FILL) ───
-  useEffect(() => {
-    if (selectedRole !== 'ALL' && allUsers.length > 0) {
-      const usersWithRole = allUsers.filter(u => u.id !== user?.id && u.id_role?.toString() === selectedRole);
-      setSelectedMembers(usersWithRole);
-      if (usersWithRole.length > 0) {
-        showToast(`✨ Magic! ${usersWithRole.length} anggota otomatis ditambahkan!`, 'success');
-      } else {
-        showToast(`Tidak ada anggota dengan role ini.`, 'info');
-      }
-    } else if (selectedRole === 'ALL') {
-      setSelectedMembers([]);
-    }
-  }, [selectedRole, allUsers, user?.id]);
 
   const showToast = (message: string, type: ToastType) => {
     setToast({ visible: true, message, type });
@@ -73,6 +70,7 @@ export default function ChatsScreen() {
         }
       }
       fetchPendingInvitations(user.id);
+      fetchUnreadCount(user.id);
     });
 
     socket.on('update_groups', () => {
@@ -103,9 +101,33 @@ export default function ChatsScreen() {
       if (userData) {
         const u = JSON.parse(userData);
         setUser(u);
+
+        // Auto-register push token on APK / Native
+        if (Capacitor.isNativePlatform()) {
+          (async () => {
+            try {
+              let token = await AsyncStorage.getItem('nativePushToken');
+              if (!token) {
+                const { PushNotifications } = await import('@capacitor/push-notifications');
+                const perm = await PushNotifications.requestPermissions();
+                if (perm.receive === 'granted') {
+                  PushNotifications.register();
+                }
+              } else {
+                authFetch(`${API_BASE_URL}/api/notifications/register-token`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ userId: u.id, pushToken: token })
+                }).catch(() => {});
+              }
+            } catch (e) {}
+          })();
+        }
+
         await Promise.all([
           fetchGroups(u.id),
           fetchPendingInvitations(u.id),
+          fetchUnreadCount(u.id),
           fetchUsersAndRoles()
         ]);
       }
@@ -118,53 +140,82 @@ export default function ChatsScreen() {
 
   const fetchGroups = async (userId: string) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/groups?userId=${userId}`);
+      const res = await authFetch(`${API_BASE_URL}/api/groups?userId=${userId}`);
       if (!res.ok) throw new Error('API Error');
       const data = await res.json();
-      setGroups(data);
+      setGroups(Array.isArray(data) ? data : []);
+      AsyncStorage.setItem(`cache_groups_${userId}`, JSON.stringify(Array.isArray(data) ? data : []));
     } catch (error) {
-      showToast('Gagal memuat daftar grup', 'error');
+      const cached = await AsyncStorage.getItem(`cache_groups_${userId}`);
+      if (cached) setGroups(JSON.parse(cached));
+      else showToast('Anda sedang offline', 'error');
     }
   };
 
   const fetchPendingInvitations = async (userId: string) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/groups/invitations/pending?userId=${userId}`);
+      const res = await authFetch(`${API_BASE_URL}/api/groups/invitations/pending?userId=${userId}`);
       const data = await res.json();
       setInvitations(data);
+      AsyncStorage.setItem(`cache_invitations_${userId}`, JSON.stringify(data));
     } catch (error) {
-      // silent
+      const cached = await AsyncStorage.getItem(`cache_invitations_${userId}`);
+      if (cached) setInvitations(JSON.parse(cached));
+    }
+  };
+
+  const fetchUnreadCount = async (userId: string) => {
+    try {
+      const res = await authFetch(`${API_BASE_URL}/api/notifications?userId=${userId}`);
+      if (res.ok) {
+        const json = await res.json();
+        const items = Array.isArray(json) ? json : (json.data || []);
+        const count = items.filter((n: any) => !n.is_read).length;
+        setUnreadCount(count);
+        AsyncStorage.setItem(`cache_unread_${userId}`, count.toString());
+      }
+    } catch (error) {
+      const cached = await AsyncStorage.getItem(`cache_unread_${userId}`);
+      if (cached) setUnreadCount(parseInt(cached));
     }
   };
 
   const fetchUsersAndRoles = async () => {
     try {
       const [usersRes, rolesRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/master/users`),
-        fetch(`${API_BASE_URL}/api/master/roles`)
+        authFetch(`${API_BASE_URL}/api/master/users`),
+        authFetch(`${API_BASE_URL}/api/master/roles`)
       ]);
       const usersData = await usersRes.json();
       const rolesData = await rolesRes.json();
       
-      // Filter role: hanya tampilkan role yang memiliki minimal 1 anggota (selain user yg login)
-      // Note: we can't reliably use user.id here if user isn't set yet, so just check all members
       const activeRoles = rolesData.filter((r: any) => 
         usersData.some((u: any) => u.id_role === r.id)
       );
 
       setAllUsers(usersData);
       setRoles(activeRoles);
+      
+      AsyncStorage.setItem('cache_users', JSON.stringify(usersData));
+      AsyncStorage.setItem('cache_roles', JSON.stringify(activeRoles));
     } catch (error) {
-      console.error('Failed to fetch users or roles');
+      const cachedUsers = await AsyncStorage.getItem('cache_users');
+      const cachedRoles = await AsyncStorage.getItem('cache_roles');
+      if (cachedUsers) setAllUsers(JSON.parse(cachedUsers));
+      if (cachedRoles) setRoles(JSON.parse(cachedRoles));
     }
   };
 
-  // Respon Anggota terhadap Undangan (ACCEPT / REJECT) - REAL-TIME
   const handleRespondInvitation = async (invitationId: number, action: 'ACCEPT' | 'REJECT', groupName: string) => {
+    if (Platform.OS === 'web' && !navigator.onLine) {
+      showToast('Fitur ini membutuhkan koneksi internet', 'error');
+      return;
+    }
+    
     try {
       showToast(`Memproses respon ${action === 'ACCEPT' ? 'Terima' : 'Tolak'}...`, 'info');
 
-      const res = await fetch(`${API_BASE_URL}/api/groups/invitations/${invitationId}/respond`, {
+      const res = await authFetch(`${API_BASE_URL}/api/groups/invitations/${invitationId}/respond`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, userId: user.id }),
@@ -212,6 +263,11 @@ export default function ChatsScreen() {
   };
 
   const handleCreateGroup = async () => {
+    if (Platform.OS === 'web' && !navigator.onLine) {
+      showToast('Fitur ini membutuhkan koneksi internet', 'error');
+      return;
+    }
+
     if (!groupLocation.trim()) {
       showToast('Lokasi acara tidak boleh kosong!', 'error');
       return;
@@ -219,10 +275,20 @@ export default function ChatsScreen() {
 
     try {
       const memberIds = selectedMembers.map(m => m.id);
-      const res = await fetch(`${API_BASE_URL}/api/groups`, {
+      const res = await authFetch(`${API_BASE_URL}/api/groups`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: finalGroupName, owner_id: user.id, member_ids: memberIds }),
+        body: JSON.stringify({
+          name: finalGroupName,
+          owner_id: user.id,
+          member_ids: memberIds,
+          event_date: groupDate,
+          call_time: callTime,
+          show_time: showTime,
+          venue_address: venueAddress,
+          dresscode: dresscode,
+          rundown_notes: rundownNotes,
+        }),
       });
       const data = await res.json();
       
@@ -233,6 +299,11 @@ export default function ChatsScreen() {
       
       showToast('Grup & Undangan Job berhasil dibuat!', 'success');
       setGroupLocation('LOK Tanggerang');
+      setCallTime('');
+      setShowTime('');
+      setVenueAddress('');
+      setDresscode('');
+      setRundownNotes('');
       setSelectedMembers([]);
       setSelectedRole('ALL');
       setSelectedMemberId('');
@@ -244,36 +315,39 @@ export default function ChatsScreen() {
   };
 
   const handleDeleteGroup = async (groupId: string, groupName: string) => {
-    const confirmDelete = () => {
-      fetch(`${API_BASE_URL}/api/groups/${groupId}?userId=${user.id}`, { method: 'DELETE' })
-        .then(res => res.json())
-        .then(data => {
-          if (data.error) {
-            showToast(data.error, 'error');
-          } else {
-            showToast('Grup diselesaikan & diarsipkan ke Riwayat!', 'success');
-            fetchGroups(user.id);
-          }
-        })
-        .catch(() => showToast('Gagal menghapus grup', 'error'));
-    };
-
-    if (Platform.OS === 'web') {
-      if (window.confirm(`Apakah Anda yakin ingin MENYELESAIKAN & MENGHAPUS grup "${groupName}"?\nGrup akan diarsipkan ke Riwayat Job Selesai Admin secara real-time.`)) {
-        confirmDelete();
-      }
-    } else {
-      Alert.alert('Selesaikan Job & Hapus Grup', `Apakah Anda yakin ingin menyelesaikan grup "${groupName}"?`, [
-        { text: 'Batal', style: 'cancel' },
-        { text: 'Selesaikan & Hapus', style: 'destructive', onPress: confirmDelete }
-      ]);
+    if (Platform.OS === 'web' && !navigator.onLine) {
+      showToast('Fitur ini membutuhkan koneksi internet', 'error');
+      return;
     }
+
+    authFetch(`${API_BASE_URL}/api/groups/${groupId}?userId=${user.id}`, { method: 'DELETE' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) {
+          showToast(data.error, 'error');
+        } else {
+          showToast('Grup diselesaikan & diarsipkan ke Riwayat!', 'success');
+          fetchGroups(user.id);
+        }
+      })
+      .catch(() => showToast('Gagal menghapus grup', 'error'));
   };
 
   const filteredUsersForDropdown = allUsers.filter(u => {
     if (u.id === user?.id) return false;
     if (selectedRole !== 'ALL' && u.id_role?.toString() !== selectedRole) return false;
     return true;
+  });
+
+  // Filter Grup Chat Berdasarkan Pencarian
+  const filteredGroups = groups.filter(g => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      (g.name && g.name.toLowerCase().includes(q)) ||
+      (g.venue_address && g.venue_address.toLowerCase().includes(q)) ||
+      (g.dresscode && g.dresscode.toLowerCase().includes(q))
+    );
   });
 
   const renderGroupItem = ({ item }: { item: any }) => {
@@ -300,6 +374,12 @@ export default function ChatsScreen() {
           <Text style={styles.groupSub}>
             {item.member_count} Anggota • {isOwner ? 'Pembuat Grup' : 'Anggota'}
           </Text>
+          {item.venue_address ? (
+            <View style={styles.venueRow}>
+              <Ionicons name="location-outline" size={12} color="#888" />
+              <Text style={styles.venueText} numberOfLines={1}>{item.venue_address}</Text>
+            </View>
+          ) : null}
         </View>
       </TouchableOpacity>
     );
@@ -311,24 +391,53 @@ export default function ChatsScreen() {
 
       {/* HEADER */}
       <View style={styles.header}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Obrolan Job ASG</Text>
           <Text style={styles.welcomeText}>Halo, {user?.nama_lengkap || user?.username} ({user?.role_name || 'Member'})</Text>
         </View>
-        {(user?.id_role === 1 || user?.id_role === 2) && (
-          <TouchableOpacity style={styles.createBtn} onPress={() => setIsModalVisible(true)}>
-            <Ionicons name="add" size={24} color="#F9F6F0" />
+
+        <View style={styles.headerRight}>
+          <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/notifications')}>
+            <Ionicons name="notifications" size={24} color="#1A1A1A" />
+            {unreadCount > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          {(user?.id_role === 1 || user?.id_role === 2) && (
+            <TouchableOpacity style={styles.createBtn} onPress={() => setIsModalVisible(true)}>
+              <Ionicons name="add" size={24} color="#F9F6F0" />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* SEARCH BAR GRUP CHAT */}
+      <View style={styles.searchBarWrapper}>
+        <Ionicons name="search" size={18} color="#888" style={styles.searchIcon} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Cari obrolan job atau lokasi..."
+          placeholderTextColor="#999"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearSearchBtn}>
+            <Ionicons name="close-circle" size={18} color="#999" />
           </TouchableOpacity>
         )}
       </View>
 
-      {/* MODAL BUAT GRUP BARU */}
+      {/* MODAL BUAT GRUP BARU DENGAN BRIEFING DETAIL */}
       {isModalVisible && (
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Buat Grup Job Baru</Text>
 
-            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+            <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
               <Text style={styles.inputLabel}>1. Tanggal Acara / Job:</Text>
               {Platform.OS === 'web' ? (
                 // @ts-ignore
@@ -338,7 +447,7 @@ export default function ChatsScreen() {
                   onChange={(e: any) => setGroupDate(e.target.value)}
                   style={{
                     padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#E0D8C8',
-                    fontSize: 14, backgroundColor: '#F9F6F0', marginBottom: 14, width: '100%',
+                    fontSize: 14, backgroundColor: '#F9F6F0', marginBottom: 10, width: '100%',
                     fontFamily: 'inherit'
                   }}
                 />
@@ -359,6 +468,58 @@ export default function ChatsScreen() {
                 <Text style={styles.previewLabel}>Hasil Nama Grup Resmi:</Text>
                 <Text style={styles.previewTitle}>"{finalGroupName}"</Text>
               </View>
+
+              {/* BRIEFING & RUNDOWN INPUTS */}
+              <View style={{ flexDirection: 'row', gap: 10, marginVertical: 4 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>Call Time:</Text>
+                  <TextInput
+                    style={styles.modalInput}
+                    placeholder="Contoh: 14:00"
+                    placeholderTextColor="#999"
+                    value={callTime}
+                    onChangeText={setCallTime}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>Show Time:</Text>
+                  <TextInput
+                    style={styles.modalInput}
+                    placeholder="Contoh: 19:30"
+                    placeholderTextColor="#999"
+                    value={showTime}
+                    onChangeText={setShowTime}
+                  />
+                </View>
+              </View>
+
+              <Text style={styles.inputLabel}>Alamat Panggung / Gedung:</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Contoh: Ballroom Lt. 2, Hotel Santika"
+                placeholderTextColor="#999"
+                value={venueAddress}
+                onChangeText={setVenueAddress}
+              />
+
+              <Text style={styles.inputLabel}>Dresscode Kostum:</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Contoh: Baju Tradisional Jawa Hitam & Emas"
+                placeholderTextColor="#999"
+                value={dresscode}
+                onChangeText={setDresscode}
+              />
+
+              <Text style={styles.inputLabel}>Catatan Rundown / Urutan Tampil:</Text>
+              <TextInput
+                style={[styles.modalInput, { minHeight: 60, textAlignVertical: 'top' }]}
+                placeholder="Urutan rundown acara..."
+                placeholderTextColor="#999"
+                multiline
+                value={rundownNotes}
+                onChangeText={setRundownNotes}
+              />
 
               <Text style={styles.inputLabel}>3. Filter Role Anggota:</Text>
               <View style={styles.pickerWrapper}>
@@ -493,9 +654,15 @@ export default function ChatsScreen() {
           <Text style={styles.emptyTitle}>Belum Ada Obrolan Job</Text>
           <Text style={styles.emptySub}>Klik ikon (+) di atas atau tunggu tawaran job untuk bergabung.</Text>
         </View>
+      ) : filteredGroups.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="search-outline" size={48} color="#999" />
+          <Text style={styles.emptyTitle}>Grup Tidak Ditemukan</Text>
+          <Text style={styles.emptySub}>Tidak ada grup obrolan yang cocok dengan "{searchQuery}".</Text>
+        </View>
       ) : (
         <FlatList
-          data={groups}
+          data={filteredGroups}
           keyExtractor={(item) => item.id.toString()}
           renderItem={renderGroupItem}
           contentContainerStyle={styles.listContainer}
@@ -521,72 +688,132 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F9F6F0' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    padding: 20, paddingTop: Platform.OS === 'web' ? 20 : 60,
-    backgroundColor: '#F9F6F0', borderBottomWidth: 1, borderBottomColor: '#E0D8C8',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'web' ? 20 : 50,
+    paddingBottom: 16,
+    backgroundColor: '#F1EBE1',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0D8C8',
   },
-  headerTitle: { fontSize: 24, fontWeight: '800', color: '#1A1A1A' },
-  welcomeText: { fontSize: 13, color: '#666', marginTop: 2 },
-  createBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center' },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#1A1A1A',
+  },
+  welcomeText: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 2,
+  },
+  bellBtn: {
+    padding: 8,
+    marginRight: 12,
+    position: 'relative',
+  },
+  badge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: '#FF3B30',
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  badgeText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  createBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center' },
+
+  // Search Bar
+  searchBarWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF',
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === 'web' ? 8 : 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E0D8C8',
+  },
+  searchIcon: { marginRight: 8 },
+  searchInput: { flex: 1, fontSize: 14, color: '#1A1A1A', paddingVertical: 4 },
+  clearSearchBtn: { padding: 4 },
 
   // Invitations (VIP TICKET DESIGN)
-  invitationSection: { padding: 16, backgroundColor: '#1A1A1A' },
-  invitationSectionTitle: { fontSize: 16, fontWeight: 'bold', color: '#D4AF37', marginBottom: 12, letterSpacing: 1 },
+  invitationSection: { padding: 16, backgroundColor: '#1A1A1A', marginTop: 8 },
+  invitationSectionTitle: { fontSize: 15, fontWeight: 'bold', color: '#D4AF37', marginBottom: 12, letterSpacing: 1 },
   vipTicketCard: { backgroundColor: '#FDFBF7', borderRadius: 16, marginBottom: 12, elevation: 4, shadowColor: '#D4AF37', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 6, overflow: 'hidden' },
-  vipTicketHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: '#2C2C2C' },
-  vipTicketTitle: { fontSize: 18, fontWeight: '900', color: '#D4AF37', textTransform: 'uppercase', letterSpacing: 0.5 },
-  vipTicketSub: { fontSize: 12, color: '#A0A0A0', marginTop: 2 },
-  vipBadge: { backgroundColor: '#D4AF37', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
-  vipBadgeText: { color: '#1A1A1A', fontWeight: 'bold', fontSize: 12, letterSpacing: 1 },
-  ticketDivider: { flexDirection: 'row', alignItems: 'center', height: 20, backgroundColor: '#2C2C2C' },
-  ticketHoleLeft: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#1A1A1A', marginLeft: -10 },
-  ticketDashedLine: { flex: 1, height: 1, borderWidth: 1, borderColor: '#D4AF37', borderStyle: 'dashed', marginHorizontal: 10, opacity: 0.5 },
-  ticketHoleRight: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#1A1A1A', marginRight: -10 },
-  vipTicketPrompt: { fontSize: 14, color: '#333', textAlign: 'center', marginVertical: 12, fontWeight: '600', paddingHorizontal: 16 },
-  vipTicketActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: 0 },
-  rejectBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: '#FF3B30', backgroundColor: '#FFF' },
-  rejectBtnText: { color: '#FF3B30', fontWeight: 'bold', fontSize: 14 },
-  acceptBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, backgroundColor: '#D4AF37', elevation: 2 },
-  acceptBtnText: { color: '#1A1A1A', fontWeight: 'bold', fontSize: 14 },
+  vipTicketHeader: { flexDirection: 'row', alignItems: 'center', padding: 14, backgroundColor: '#2C2C2C' },
+  vipTicketTitle: { fontSize: 16, fontWeight: '900', color: '#D4AF37', textTransform: 'uppercase', letterSpacing: 0.5 },
+  vipTicketSub: { fontSize: 11, color: '#A0A0A0', marginTop: 2 },
+  vipBadge: { backgroundColor: '#D4AF37', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  vipBadgeText: { color: '#1A1A1A', fontWeight: 'bold', fontSize: 11, letterSpacing: 1 },
+  ticketDivider: { flexDirection: 'row', alignItems: 'center', height: 16, backgroundColor: '#2C2C2C' },
+  ticketHoleLeft: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#1A1A1A', marginLeft: -8 },
+  ticketDashedLine: { flex: 1, height: 1, borderWidth: 1, borderColor: '#D4AF37', borderStyle: 'dashed', marginHorizontal: 8, opacity: 0.5 },
+  ticketHoleRight: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#1A1A1A', marginRight: -8 },
+  vipTicketPrompt: { fontSize: 13, color: '#333', textAlign: 'center', marginVertical: 10, fontWeight: '600', paddingHorizontal: 14 },
+  vipTicketActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, paddingTop: 0 },
+  rejectBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#FF3B30', backgroundColor: '#FFF' },
+  rejectBtnText: { color: '#FF3B30', fontWeight: 'bold', fontSize: 13 },
+  acceptBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, backgroundColor: '#D4AF37', elevation: 2 },
+  acceptBtnText: { color: '#1A1A1A', fontWeight: 'bold', fontSize: 13 },
 
   // Groups
-  listContainer: { padding: 20 },
+  listContainer: { padding: 16 },
   groupCard: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF',
-    padding: 16, borderRadius: 16, marginBottom: 12, borderWidth: 1, borderColor: '#E0D8C8',
+    padding: 14, borderRadius: 14, marginBottom: 10, borderWidth: 1, borderColor: '#E0D8C8',
     elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4,
   },
-  avatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#F1EBE1', justifyContent: 'center', alignItems: 'center', marginRight: 14 },
-  avatarText: { fontSize: 20, fontWeight: 'bold', color: '#1A1A1A' },
+  avatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#F1EBE1', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  avatarText: { fontSize: 18, fontWeight: 'bold', color: '#1A1A1A' },
   groupInfo: { flex: 1 },
   groupHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  groupName: { fontSize: 16, fontWeight: 'bold', color: '#1A1A1A', flex: 1, marginRight: 8 },
-  deleteBtn: { padding: 6 },
-  groupSub: { fontSize: 12, color: '#888', marginTop: 4 },
+  groupName: { fontSize: 15, fontWeight: 'bold', color: '#1A1A1A', flex: 1, marginRight: 8 },
+  deleteBtn: { padding: 4 },
+  groupSub: { fontSize: 12, color: '#888', marginTop: 2 },
+  venueRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  venueText: { fontSize: 11, color: '#666' },
 
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
-  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#1A1A1A', marginTop: 16 },
-  emptySub: { fontSize: 13, color: '#888', textAlign: 'center', marginTop: 8 },
+  emptyTitle: { fontSize: 17, fontWeight: 'bold', color: '#1A1A1A', marginTop: 14 },
+  emptySub: { fontSize: 13, color: '#888', textAlign: 'center', marginTop: 6 },
 
   // Modal
   modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 100, justifyContent: 'center', alignItems: 'center', padding: 20 },
-  modalContent: { width: '100%', maxWidth: 450, backgroundColor: '#FFF', borderRadius: 24, padding: 20 },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#1A1A1A', marginBottom: 16 },
-  inputLabel: { fontSize: 13, fontWeight: 'bold', color: '#444', marginBottom: 6, marginTop: 10 },
-  modalInput: { backgroundColor: '#F9F6F0', borderWidth: 1, borderColor: '#E0D8C8', borderRadius: 10, padding: 12, fontSize: 14, color: '#1A1A1A' },
-  previewBox: { backgroundColor: '#F1EBE1', padding: 12, borderRadius: 12, marginVertical: 8, borderWidth: 1, borderColor: '#E0D8C8' },
-  previewLabel: { fontSize: 11, color: '#888', fontWeight: 'bold' },
-  previewTitle: { fontSize: 15, fontWeight: 'bold', color: '#1A1A1A', marginTop: 2 },
+  modalContent: { width: '100%', maxWidth: 450, backgroundColor: '#FFF', borderRadius: 20, padding: 18 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#1A1A1A', marginBottom: 14 },
+  inputLabel: { fontSize: 12, fontWeight: 'bold', color: '#444', marginBottom: 4, marginTop: 8 },
+  modalInput: { backgroundColor: '#F9F6F0', borderWidth: 1, borderColor: '#E0D8C8', borderRadius: 10, padding: 10, fontSize: 13, color: '#1A1A1A' },
+  previewBox: { backgroundColor: '#F1EBE1', padding: 10, borderRadius: 10, marginVertical: 6, borderWidth: 1, borderColor: '#E0D8C8' },
+  previewLabel: { fontSize: 10, color: '#888', fontWeight: 'bold' },
+  previewTitle: { fontSize: 14, fontWeight: 'bold', color: '#1A1A1A', marginTop: 2 },
   pickerWrapper: { borderWidth: 1, borderColor: '#E0D8C8', borderRadius: 10, backgroundColor: '#F9F6F0', overflow: 'hidden' },
-  addToListBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1A1A1A', padding: 10, borderRadius: 10, marginTop: 10 },
-  addToListBtnText: { color: '#FFF', fontWeight: 'bold', fontSize: 13 },
-  emptyMembersText: { fontSize: 12, color: '#999', fontStyle: 'italic', marginVertical: 4 },
-  chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 8 },
-  memberChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F1EBE1', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: '#E0D8C8' },
-  chipText: { fontSize: 12, color: '#1A1A1A', fontWeight: 'bold' },
-  modalButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 20 },
-  cancelBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 10, backgroundColor: '#F1EBE1' },
-  cancelBtnText: { color: '#666', fontWeight: 'bold' },
+  addToListBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1A1A1A', padding: 10, borderRadius: 10, marginTop: 8 },
+  addToListBtnText: { color: '#FFF', fontWeight: 'bold', fontSize: 12 },
+  emptyMembersText: { fontSize: 11, color: '#999', fontStyle: 'italic', marginVertical: 4 },
+  chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 6 },
+  memberChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F1EBE1', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 14, borderWidth: 1, borderColor: '#E0D8C8' },
+  chipText: { fontSize: 11, color: '#1A1A1A', fontWeight: 'bold' },
+  modalButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 16 },
+  cancelBtn: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, backgroundColor: '#F1EBE1' },
+  cancelBtnText: { color: '#666', fontWeight: 'bold', fontSize: 13 },
   saveBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 10, backgroundColor: '#1A1A1A' },
-  saveBtnText: { color: '#FFF', fontWeight: 'bold' },
+  saveBtnText: { color: '#FFF', fontWeight: 'bold', fontSize: 13 },
 });

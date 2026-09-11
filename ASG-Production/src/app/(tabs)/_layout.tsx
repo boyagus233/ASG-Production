@@ -14,7 +14,8 @@ export default function TabLayout() {
         const userData = await AsyncStorage.getItem('userData');
         if (userData) {
           const user = JSON.parse(userData);
-          if (user.id_role === 1) {
+          const roleId = Number(user.id_role);
+          if (roleId === 1 || roleId === 2) {
             setIsAdmin(true);
           }
         } else {
@@ -59,6 +60,13 @@ export default function TabLayout() {
         options={{
           title: 'Chats',
           tabBarIcon: ({ color }) => <Ionicons name="chatbubbles" size={24} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="calendar"
+        options={{
+          title: 'Jadwal',
+          tabBarIcon: ({ color }) => <Ionicons name="calendar" size={24} color={color} />,
         }}
       />
       <Tabs.Screen
