@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -100,32 +101,13 @@ io.on('connection', (socket) => {
   });
 });
 
-// Main Server (Cloud & Local)
+// Main Server
 const PORT_MAIN = process.env.PORT || 4000;
 const serverMain = http.createServer(pwaApp);
 io.attach(serverMain);
 serverMain.listen(PORT_MAIN, '0.0.0.0', () => {
   console.log(`🌐 ASG Production Server running on 0.0.0.0:${PORT_MAIN}`);
 });
-
-// Secondary fallback ports (Only on local machine when PORT is not injected by cloud)
-if (!process.env.PORT) {
-  try {
-    const server3000 = http.createServer(apiApp);
-    io.attach(server3000);
-    server3000.listen(3000, '0.0.0.0', () => {
-      console.log('🚀 Port 3000: Pure Backend API running on 0.0.0.0');
-    });
-
-    const server3001 = http.createServer(pwaApp);
-    io.attach(server3001);
-    server3001.listen(3001, '0.0.0.0', () => {
-      console.log('🌐 Port 3001: Backup PWA running on 0.0.0.0');
-    });
-  } catch (err) {
-    console.log('Local secondary ports skipped');
-  }
-}
 
 // Start Port 3002 (God Mode)
 const monitorApp = express();
