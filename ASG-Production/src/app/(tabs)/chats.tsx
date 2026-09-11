@@ -7,6 +7,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { Toast, ToastType } from '../../components/Toast';
 import { API_BASE_URL, authFetch } from '../../config/api';
 import { socket } from '../../services/socket';
+import { showSystemNotification, syncWebPushToken } from '../../utils/notifications';
 
 export default function ChatsScreen() {
   const [user, setUser] = useState<any>(null);
@@ -60,17 +61,25 @@ export default function ChatsScreen() {
     socket.on('new_job_invitation', (notif: { title: string; body: string }) => {
       showToast(`${notif.title}\n${notif.body}`, 'info');
 
-      // Tampilkan Notifikasi Bilah Sistem HP / Browser
-      if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
-        if (Notification.permission === 'granted') {
-          new Notification(notif.title, {
-            body: notif.body,
-            icon: '/favicon.png'
-          });
-        }
-      }
+      // Tampilkan Notifikasi Bilah Sistem HP / Browser (Kompatibel Android Chrome & Desktop)
+      showSystemNotification(notif.title, {
+        body: notif.body,
+        icon: '/icon-192.png'
+      });
+
       fetchPendingInvitations(user.id);
       fetchUnreadCount(user.id);
+    });
+
+    // ⚡ LISTEN NOTIFIKASI PESAN CHAT MASUK REAL-TIME
+    socket.on('new_chat_notification', (data: { groupId: number; groupName: string; senderName: string; content: string }) => {
+      showSystemNotification(data.groupName, {
+        body: `${data.senderName}: ${data.content}`,
+        icon: '/icon-192.png',
+        tag: `chat-${data.groupId}`,
+        data: { groupId: data.groupId }
+      });
+      fetchGroups(user.id);
     });
 
     socket.on('update_groups', () => {
@@ -81,15 +90,18 @@ export default function ChatsScreen() {
       fetchPendingInvitations(user.id);
     });
 
-    // Minta izin notifikasi browser jika belum disetujui
+    // Minta izin notifikasi browser jika belum disetujui & otomatis sinkron token push
     if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
       if (Notification.permission === 'default') {
-        Notification.requestPermission();
+        Notification.requestPermission().then(() => syncWebPushToken(user.id));
+      } else if (Notification.permission === 'granted') {
+        syncWebPushToken(user.id);
       }
     }
 
     return () => {
       socket.off('new_job_invitation');
+      socket.off('new_chat_notification');
       socket.off('update_groups');
       socket.off('update_invitations');
     };

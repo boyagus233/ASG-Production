@@ -124,18 +124,24 @@ router.post('/register-token', async (req, res) => {
   }
 });
 
-// Route untuk Uji Coba Pengiriman Notifikasi Firebase (HANYA ADMIN)
-router.post('/send-test', requireAdmin, async (req, res) => {
+// Route untuk Uji Coba Pengiriman Notifikasi Firebase
+router.post('/send-test', async (req, res) => {
   const { sendPushNotification } = require('../firebase');
   try {
-    const title = req.body.title || 'TEST NOTIFIKASI FIREBASE ASG! 🔔';
-    const body = req.body.body || 'Halo sayang! Notifikasi ini berhasil dikirim dari server ke semua HP & Web PWA!';
+    const title = req.body.title || 'TEST NOTIFIKASI ASG! 🔔';
+    const body = req.body.body || 'Halo! Notifikasi ini berhasil dikirim dari server ke HP Anda!';
 
-    // 1. Ambil token push
-    const result = await db.query('SELECT push_token, user_id FROM user_push_tokens');
+    const isAdmin = req.user && req.user.role === 1;
+    let query = 'SELECT push_token, user_id FROM user_push_tokens';
+    let params = [];
+    if (!isAdmin) {
+      query += ' WHERE user_id = $1';
+      params.push(req.user.id);
+    }
+
+    const result = await db.query(query, params);
     const tokens = result.rows.map(r => r.push_token).filter(t => t && t !== 'token-bohong-123');
 
-    // 2. Simpan notifikasi ke database untuk semua user yang terdaftar
     const userIds = [...new Set(result.rows.map(r => r.user_id))];
     for (const uid of userIds) {
       await db.query(
@@ -143,20 +149,17 @@ router.post('/send-test', requireAdmin, async (req, res) => {
         [uid, title, body]
       );
     }
-    
-    if (tokens.length === 0) {
-      return res.status(404).json({ error: 'Belum ada token push di database.' });
+
+    if (tokens.length > 0) {
+      await sendPushNotification(
+        tokens,
+        title,
+        body,
+        { type: 'test' }
+      );
     }
 
-    // 3. Kirim notifikasi Firebase Cloud Messaging
-    await sendPushNotification(
-      tokens,
-      title,
-      body,
-      { type: 'test' }
-    );
-
-    res.json({ message: `Notifikasi terkirim ke ${tokens.length} perangkat.`, tokensCount: tokens.length });
+    res.json({ message: `Notifikasi diproses untuk ${tokens.length} perangkat terdaftar.`, tokensCount: tokens.length });
   } catch (error) {
     console.error('Error sending test notification:', error);
     res.status(500).json({ error: 'Gagal mengirim notifikasi.' });

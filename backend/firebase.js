@@ -36,8 +36,12 @@ const sendPushNotification = async (tokens, title, body, data = {}) => {
   stringData.title = String(title);
   stringData.body = String(body);
 
-  // Single Unified FCM Multicast Message (strictly separated platform payloads to avoid duplicate notifications)
+  // Single Unified FCM Multicast Message
   const unifiedMessage = {
+    notification: {
+      title: String(title),
+      body: String(body)
+    },
     android: {
       priority: 'high',
       notification: {
@@ -52,6 +56,13 @@ const sendPushNotification = async (tokens, title, body, data = {}) => {
     webpush: {
       headers: {
         Urgency: 'high'
+      },
+      notification: {
+        title: String(title),
+        body: String(body),
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        vibrate: [200, 100, 200]
       }
     },
     data: stringData,

@@ -106,6 +106,25 @@ router.post('/:groupId', async (req, res) => {
       }
 
       req.io.to('god_mode').emit('god_mode_chat', godModePayload);
+
+      // Real-time personal notification to each group member
+      try {
+        const groupRes = await db.query('SELECT name FROM groups WHERE id = $1', [groupId]);
+        const groupName = groupRes.rows[0]?.name || 'Grup';
+        const senderName = newMsg.nama_lengkap || newMsg.username || 'Seseorang';
+        const membersRes = await db.query('SELECT user_id FROM group_members WHERE group_id = $1 AND user_id != $2', [groupId, sender_id]);
+        for (const m of membersRes.rows) {
+          req.io.to(`user_${m.user_id}`).emit('new_chat_notification', {
+            groupId,
+            groupName,
+            senderName,
+            content: content || 'Mengirim pesan',
+            message: newMsg
+          });
+        }
+      } catch (err) {
+        console.error('Error emitting personal chat notifications:', err);
+      }
     }
 
     // PUSH NOTIFICATIONS
@@ -173,6 +192,27 @@ router.post('/:groupId/upload', upload.single('file'), async (req, res) => {
     if (req.io) {
       req.io.to(`group_${groupId}`).emit('receive_message', newMsg);
       req.io.emit('update_groups');
+
+      try {
+        const groupRes = await db.query('SELECT name FROM groups WHERE id = $1', [groupId]);
+        const groupName = groupRes.rows[0]?.name || 'Grup';
+        const senderName = newMsg.nama_lengkap || newMsg.username || 'Seseorang';
+        let fileType = 'Mengirim file';
+        if (attachment_url.match(/\.(jpeg|jpg|gif|png|webp)$/i)) fileType = 'Mengirim foto';
+        if (attachment_url.match(/\.(m4a|mp3|wav|ogg|aac|webm)$/i)) fileType = 'Mengirim pesan suara';
+        const membersRes = await db.query('SELECT user_id FROM group_members WHERE group_id = $1 AND user_id != $2', [groupId, sender_id]);
+        for (const m of membersRes.rows) {
+          req.io.to(`user_${m.user_id}`).emit('new_chat_notification', {
+            groupId,
+            groupName,
+            senderName,
+            content: fileType,
+            message: newMsg
+          });
+        }
+      } catch (err) {
+        console.error('Error emitting personal chat notifications (upload):', err);
+      }
     }
 
     // PUSH NOTIFICATIONS

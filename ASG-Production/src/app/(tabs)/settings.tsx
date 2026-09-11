@@ -3,7 +3,8 @@ import { View, Text, TouchableOpacity, StyleSheet, Platform, Image } from 'react
 import { router, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { getFileUrl } from '../../config/api';
+import { getFileUrl, API_BASE_URL, authFetch } from '../../config/api';
+import { showSystemNotification, syncWebPushToken } from '../../utils/notifications';
 
 export default function SettingsScreen() {
   const [user, setUser] = useState<any>(null);
@@ -15,6 +16,39 @@ export default function SettingsScreen() {
       });
     }, [])
   );
+
+  const handleTestNotification = async () => {
+    try {
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
+        if (Notification.permission !== 'granted') {
+          const perm = await Notification.requestPermission();
+          if (perm !== 'granted') {
+            alert('Izin notifikasi belum diizinkan di browser/HP Anda.');
+            return;
+          }
+        }
+        await syncWebPushToken(user?.id);
+        await showSystemNotification('🔔 Tes Notifikasi ASG!', {
+          body: `Halo ${user?.nama_lengkap || user?.username}! Notifikasi di HP kamu sudah BERHASIL aktif 100%!`,
+          icon: '/icon-192.png'
+        });
+      }
+
+      // Panggil backend juga untuk tes push server
+      try {
+        await authFetch(`${API_BASE_URL}/api/notifications/send-test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: 'ASG Production 🔔',
+            body: `Halo ${user?.nama_lengkap || user?.username}! Notifikasi push dari server berhasil!`
+          })
+        });
+      } catch (e) {}
+    } catch (err: any) {
+      alert('Error tes notifikasi: ' + err?.message);
+    }
+  };
 
   const handleLogout = async () => {
     await AsyncStorage.removeItem('userToken');
@@ -63,8 +97,18 @@ export default function SettingsScreen() {
         {/* Notifikasi */}
         <TouchableOpacity style={styles.menuItem} onPress={() => router.push('/notifications')}>
           <Ionicons name="notifications-outline" size={24} color="#1A1A1A" style={styles.menuIcon} />
-          <Text style={styles.menuText}>Notifikasi</Text>
+          <Text style={styles.menuText}>Riwayat Notifikasi</Text>
           <Ionicons name="chevron-forward" size={20} color="#666" />
+        </TouchableOpacity>
+
+        {/* Tes Bunyikan Notifikasi HP */}
+        <TouchableOpacity style={[styles.menuItem, { backgroundColor: '#F5EFE0', borderRadius: 12, paddingHorizontal: 12, marginVertical: 4 }]} onPress={handleTestNotification}>
+          <Ionicons name="volume-high-outline" size={24} color="#D4AF37" style={styles.menuIcon} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.menuText, { fontWeight: 'bold', color: '#1A1A1A' }]}>Tes Bunyikan Notifikasi HP</Text>
+            <Text style={{ fontSize: 11, color: '#666' }}>Uji coba banner & suara notifikasi sekarang</Text>
+          </View>
+          <Ionicons name="play-circle" size={24} color="#D4AF37" />
         </TouchableOpacity>
 
         {/* Logout */}

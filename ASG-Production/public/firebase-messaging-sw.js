@@ -43,6 +43,30 @@ messaging.onBackgroundMessage((payload) => {
   return self.registration.showNotification(notificationTitle, notificationOptions);
 });
 
+// Generic Web Push event fallback listener (menjamin notifikasi selalu tampil di Android Chrome & PWA)
+self.addEventListener('push', (event) => {
+  if (event.data) {
+    try {
+      const payload = event.data.json();
+      const title = payload.notification?.title || payload.data?.title || 'ASG Production 🔔';
+      const body = payload.notification?.body || payload.data?.body || 'Ada pesan atau tawaran job baru di ASG!';
+      event.waitUntil(
+        self.registration.showNotification(title, {
+          body,
+          icon: '/icon-192.png',
+          badge: '/icon-192.png',
+          vibrate: [200, 100, 200],
+          tag: payload.data?.tag || `asg-${Date.now()}`,
+          renotify: true,
+          data: payload.data || {}
+        })
+      );
+    } catch (e) {
+      console.warn('Raw push parse fallback:', e);
+    }
+  }
+});
+
 // Handle notification click to open or focus the app
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
