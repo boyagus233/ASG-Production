@@ -35,13 +35,26 @@ export async function showSystemNotification(
   // 1. Android Chrome & PWA: Wajib Service Worker
   if ('serviceWorker' in navigator) {
     try {
-      const reg = await navigator.serviceWorker.ready;
+      let reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) {
+        reg = await navigator.serviceWorker.register('/firebase-messaging-sw.js?v=2.1.0', { scope: '/' });
+      }
       if (reg && typeof reg.showNotification === 'function') {
         await reg.showNotification(title, notifOptions);
         return;
       }
     } catch (swErr) {
-      console.warn('[PWA Notification] SW showNotification error:', swErr);
+      console.warn('[PWA Notification] SW getRegistration error:', swErr);
+    }
+
+    try {
+      const readyReg = await navigator.serviceWorker.ready;
+      if (readyReg && typeof readyReg.showNotification === 'function') {
+        await readyReg.showNotification(title, notifOptions);
+        return;
+      }
+    } catch (readyErr) {
+      console.warn('[PWA Notification] SW ready error:', readyErr);
     }
   }
 

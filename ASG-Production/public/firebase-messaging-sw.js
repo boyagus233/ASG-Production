@@ -1,8 +1,9 @@
-// Scripts needed for Firebase Messaging in Service Worker
+// ASG Production Service Worker v2.1.0 - Auto Update
+// Build: 2026-09-11T12:50:00Z
 importScripts('https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.9.0/firebase-messaging-compat.js');
 
-self.addEventListener('install', () => {
+self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 

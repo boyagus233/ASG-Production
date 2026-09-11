@@ -56,9 +56,37 @@ const pwaApp = express();
 setupApiApp(pwaApp);
 const pwaDir = path.join(__dirname, 'public');
 
-pwaApp.use(express.static(pwaDir));
+// Strict anti-cache headers for PWA HTML, Service Worker, and Manifest files
+pwaApp.use((req, res, next) => {
+  const url = req.url.toLowerCase();
+  if (
+    url === '/' ||
+    url.includes('.html') ||
+    url.includes('sw.js') ||
+    url.includes('manifest.json')
+  ) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+  next();
+});
+
+pwaApp.use(express.static(pwaDir, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html') || filePath.endsWith('sw.js') || filePath.endsWith('.json')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
+
 pwaApp.use((req, res, next) => {
   if (req.url.startsWith('/api') || req.url.startsWith('/socket.io') || req.url.startsWith('/uploads')) return next();
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.join(pwaDir, 'index.html'));
 });
 

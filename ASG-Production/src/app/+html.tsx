@@ -25,8 +25,9 @@ export default function Root({ children }: { children: React.ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: `
           if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
-              navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' }).then(function(registration) {
+              navigator.serviceWorker.register('/firebase-messaging-sw.js?v=2.1.0', { scope: '/' }).then(function(registration) {
                 console.log('Firebase ServiceWorker registration successful with scope: ', registration.scope);
+                registration.update();
               }).catch(function(err) {
                 console.error('Firebase ServiceWorker registration failed: ', err);
               });

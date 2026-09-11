@@ -19,19 +19,28 @@ export default function SettingsScreen() {
 
   const handleTestNotification = async () => {
     try {
-      if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
-        if (Notification.permission !== 'granted') {
-          const perm = await Notification.requestPermission();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        if (!('Notification' in window)) {
+          alert('Perangkat atau browser ini tidak mendukung Web Notification API.');
+          return;
+        }
+
+        let perm = Notification.permission;
+        if (perm !== 'granted') {
+          perm = await Notification.requestPermission();
           if (perm !== 'granted') {
-            alert('Izin notifikasi belum diizinkan di browser/HP Anda.');
+            alert('Izin notifikasi belum diizinkan. Silakan buka Pengaturan Chrome > Izin Situs > Notifikasi > Izinkan.');
             return;
           }
         }
+
         await syncWebPushToken(user?.id);
         await showSystemNotification('🔔 Tes Notifikasi ASG!', {
-          body: `Halo ${user?.nama_lengkap || user?.username}! Notifikasi di HP kamu sudah BERHASIL aktif 100%!`,
+          body: `Halo ${user?.nama_lengkap || user?.username}! Notifikasi di HP kamu sudah AKTIF 100%!`,
           icon: '/icon-192.png'
         });
+
+        alert('✅ Notifikasi telah dikirim! Silakan periksa bilah notifikasi atas di HP Anda.');
       }
 
       // Panggil backend juga untuk tes push server
@@ -47,6 +56,26 @@ export default function SettingsScreen() {
       } catch (e) {}
     } catch (err: any) {
       alert('Error tes notifikasi: ' + err?.message);
+    }
+  };
+
+  const handleRefreshApp = async () => {
+    try {
+      if (typeof window !== 'undefined') {
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map(k => caches.delete(k)));
+        }
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          for (const r of regs) {
+            await r.unregister();
+          }
+        }
+        window.location.reload();
+      }
+    } catch (e) {
+      if (typeof window !== 'undefined') window.location.reload();
     }
   };
 
@@ -109,6 +138,16 @@ export default function SettingsScreen() {
             <Text style={{ fontSize: 11, color: '#666' }}>Uji coba banner & suara notifikasi sekarang</Text>
           </View>
           <Ionicons name="play-circle" size={24} color="#D4AF37" />
+        </TouchableOpacity>
+
+        {/* Refresh / Update PWA */}
+        <TouchableOpacity style={[styles.menuItem, { backgroundColor: '#E8F5E9', borderRadius: 12, paddingHorizontal: 12, marginVertical: 4 }]} onPress={handleRefreshApp}>
+          <Ionicons name="refresh-circle-outline" size={24} color="#2E7D32" style={styles.menuIcon} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.menuText, { fontWeight: 'bold', color: '#1B5E20' }]}>Perbarui / Refresh Aplikasi</Text>
+            <Text style={{ fontSize: 11, color: '#558B2F' }}>Bersihkan cache & muat versi PWA terbaru</Text>
+          </View>
+          <Ionicons name="cloud-download-outline" size={20} color="#2E7D32" />
         </TouchableOpacity>
 
         {/* Logout */}
